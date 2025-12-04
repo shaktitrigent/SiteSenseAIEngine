@@ -1,0 +1,82 @@
+# Default configuration for Web Testing System
+
+# Excel Input Configuration
+excel:
+  url_column: "url"  # Column name containing URLs
+  company_column: null  # Optional: explicit company column (if null, inferred from domain)
+
+# Output Directories
+output:
+  results_dir: "output/results"
+  screenshots_dir: "output/screenshots"
+  reports_dir: "output/reports"
+
+# Browser Settings
+browser:
+  headless: true
+  timeout: 30000  # milliseconds
+  viewport:
+    width: 1920
+    height: 1080
+  concurrency: 2  # Number of parallel browser instances
+
+# Site Analysis
+analysis:
+  max_depth: 2  # Maximum crawl depth for site analysis
+  max_pages: 10  # Maximum pages to analyze per domain
+  timeout: 10000  # milliseconds per page
+
+# Test Generation
+test_generation:
+  enable_functional: true
+  enable_smoke: true
+  enable_accessibility: true
+  enable_performance: true
+  enable_uiux: true
+
+# Performance Thresholds
+performance:
+  page_load_time_ms: 3000  # Maximum acceptable page load time
+  lcp_threshold_ms: 2500  # Largest Contentful Paint
+  cls_threshold: 0.1  # Cumulative Layout Shift
+  inp_threshold_ms: 200  # Interaction to Next Paint
+  max_requests: 100  # Maximum acceptable requests per page
+  max_payload_mb: 5  # Maximum acceptable payload size in MB
+
+# Severity Mapping
+severity:
+  p1_keywords:
+    - "critical"
+    - "blocking"
+    - "core flow"
+    - "checkout"
+    - "login"
+    - "payment"
+  p2_keywords:
+    - "important"
+    - "navigation"
+    - "form"
+  p3_keywords:
+    - "minor"
+    - "suggestion"
+    - "enhancement"
+
+# UI/UX Settings
+uiux:
+  viewport_sizes:
+    - {width: 1920, height: 1080}  # Desktop
+    - {width: 375, height: 667}    # Mobile
+  layout_tolerance: 5  # pixels tolerance for alignment checks
+  image_relevance_check: true
+
+# Accessibility
+accessibility:
+  wcag_level: "AA"  # WCAG compliance level
+  rules_to_skip: []  # List of axe rules to skip
+
+# Reporting
+reporting:
+  include_screenshots: true
+  chart_theme: "light"
+  pdf_friendly: true
+
