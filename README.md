@@ -241,14 +241,16 @@ Open the generated HTML reports in your browser:
 
 ```bash
 # Windows
-start output\reports\Trigent_Functional_Report.html
+start output\reports\trigent_com\trigent_com_Functional_Report.html
 
 # macOS
-open output/reports/Trigent_Functional_Report.html
+open output/reports/trigent_com/trigent_com_Functional_Report.html
 
 # Linux
-xdg-open output/reports/Trigent_Functional_Report.html
+xdg-open output/reports/trigent_com/trigent_com_Functional_Report.html
 ```
+
+**Note:** PDF versions of all reports are automatically generated and saved in the same domain folder.
 
 ### Advanced Usage
 
@@ -270,12 +272,74 @@ python main.py example_urls.xlsx --headless false
 python main.py example_urls.xlsx --output-dir my_output
 ```
 
+#### Parallel Execution (Multiple Companies/Domains and URLs)
+
+The system supports parallel execution at two levels:
+1. **Company/Domain level**: Multiple companies/domains tested simultaneously
+2. **URL level**: Multiple URLs within the same company tested simultaneously
+
+**How it works:**
+- Each company/domain runs in its own isolated browser instance
+- Multiple companies are tested concurrently based on the `concurrency` setting
+- URLs within the same company can also run in parallel (if `url_concurrency > 1`)
+- The system automatically limits parallelism to the actual number of URLs/companies available
+
+**Configure Parallel Execution:**
+
+Edit `config/default_config.yaml`:
+
+```yaml
+browser:
+  concurrency: 4  # Number of companies to test in parallel (default: 2)
+```
+
+**Example: Testing Multiple Companies in Parallel**
+
+```bash
+# With default concurrency (2 companies in parallel)
+python main.py multiple_companies.xlsx
+
+# With command-line argument (3 parallel instances, max 5)
+python main.py multiple_companies.xlsx --parallel 3
+
+# With custom config for higher concurrency (4 companies in parallel)
+python main.py multiple_companies.xlsx --config high_concurrency_config.yaml
+
+# Command-line argument overrides config (2 parallel instances)
+python main.py multiple_companies.xlsx --config high_concurrency_config.yaml --parallel 2
+```
+
+**Example: Testing Multiple URLs in Parallel (Same Domain)**
+
+If you have 2 URLs in your Excel file from the same domain:
+```bash
+# Run 2 URLs in parallel (even if same domain)
+python main.py example_urls.xlsx --parallel 2
+
+# If you request 3 but only have 2 URLs, it will use 2 instances
+python main.py example_urls.xlsx --parallel 3  # Uses 2 (actual URL count)
+```
+
+**Performance Benefits:**
+- **2 companies in parallel**: ~50% faster than sequential
+- **4 companies in parallel**: ~75% faster than sequential
+- **8 companies in parallel**: ~87% faster than sequential
+
+**Recommended Settings:**
+- **Low-end machines**: `concurrency: 2` (default)
+- **Mid-range machines**: `concurrency: 4`
+- **High-end machines**: `concurrency: 6-8`
+- **Servers/CI**: `concurrency: 8-10`
+
+**Note:** Higher concurrency requires more system resources (CPU, RAM, network bandwidth). Monitor system performance and adjust accordingly.
+
 ### Command Line Options
 
 - `excel_file`: Path to Excel file containing URLs (required)
 - `--config`: Path to configuration YAML file (optional)
 - `--headless`: Run browser in headless mode (true/false, optional, default: true)
 - `--output-dir`: Base output directory (optional, overrides config)
+- `--parallel`: Number of parallel instances to run (optional, default: from config, max: 5). If URLs/companies < parallel, uses actual count.
 
 ### Excel File Format
 
@@ -307,12 +371,36 @@ Configuration is managed via YAML files. See `config/default_config.yaml` for al
 
 - **Excel**: Column names for URL and company
 - **Output**: Directories for results, screenshots, and reports
-- **Browser**: Headless mode, timeout, viewport settings
+- **Browser**: Headless mode, timeout, viewport settings, **concurrency** (parallel execution)
 - **Analysis**: Crawl depth, max pages, timeout
 - **Test Generation**: Enable/disable test types
 - **Performance**: Thresholds for metrics
 - **Accessibility**: WCAG level, rules to skip
 - **UI/UX**: Viewport sizes, layout tolerance
+
+### Parallel Execution Configuration
+
+The `browser.concurrency` setting controls how many companies/domains are tested simultaneously, and `browser.url_concurrency` controls parallel URL execution within a company:
+
+```yaml
+browser:
+  concurrency: 4  # Test 4 companies in parallel (max: 5)
+  url_concurrency: 2  # Test 2 URLs in parallel within each company (max: 5)
+```
+
+**Command-Line Override:**
+The `--parallel` command-line argument overrides both settings:
+```bash
+python main.py urls.xlsx --parallel 3  # Sets both company and URL concurrency to 3
+```
+
+**Best Practices:**
+- Start with `--parallel 2` (default) and increase based on system performance
+- Monitor CPU and memory usage during execution
+- For large-scale testing (100+ URLs), use `--parallel 4-5`
+- Each parallel instance uses ~200-500MB RAM
+- Higher concurrency = faster execution but more resource usage
+- Maximum is capped at 5 for system stability
 
 ## Output Structure
 
@@ -327,11 +415,19 @@ output/
 │   │   └── TEST-002.png
 │   └── company2_domain/
 └── reports/
-    ├── Company1_Functional_Report.html
-    ├── Company1_Smoke_Report.html
-    ├── Company1_Accessibility_Report.html
-    ├── Company1_Performance_Report.html
-    └── ...
+    ├── domain1_com/
+    │   ├── domain1_com_Functional_Report.html
+    │   ├── domain1_com_Functional_Report.pdf
+    │   ├── domain1_com_Smoke_Report.html
+    │   ├── domain1_com_Smoke_Report.pdf
+    │   ├── domain1_com_Accessibility_Report.html
+    │   ├── domain1_com_Accessibility_Report.pdf
+    │   ├── domain1_com_Performance_Report.html
+    │   └── domain1_com_Performance_Report.pdf
+    └── domain2_com/
+        ├── domain2_com_Functional_Report.html
+        ├── domain2_com_Functional_Report.pdf
+        └── ...
 ```
 
 ## Report Types

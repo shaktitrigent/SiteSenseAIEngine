@@ -1,11 +1,13 @@
 """
-HTML report generator with charts
+HTML report generator with charts and PDF conversion
 """
 
 from pathlib import Path
 from typing import List, Dict, Any
 from jinja2 import Template
 import logging
+import asyncio
+from playwright.async_api import async_playwright
 
 from src.models import TestResult, TestType
 
@@ -29,35 +31,85 @@ class ReportGenerator:
     
     def generate_reports(self, company_name: str, domain: str, results: List[TestResult]):
         """
-        Generate all 4 HTML reports for a company
+        Generate all 4 HTML reports for a company and convert to PDF
         
         Args:
             company_name: Company name
             domain: Domain name
             results: List of TestResult objects
         """
+        # Create domain-specific folder
+        domain_folder = self._sanitize_domain(domain)
+        domain_dir = self.output_dir / domain_folder
+        domain_dir.mkdir(parents=True, exist_ok=True)
+        
         # Filter results by type
         functional_results = [r for r in results if r.test_type == TestType.FUNCTIONAL]
         smoke_results = [r for r in results if r.test_type == TestType.SMOKE]
         accessibility_results = [r for r in results if r.test_type == TestType.ACCESSIBILITY]
         performance_results = [r for r in results if r.test_type == TestType.PERFORMANCE]
         
+        html_files = []
+        
         # Generate each report
         if functional_results:
-            self._generate_report(company_name, domain, "Functional", functional_results)
+            html_file = self._generate_report(company_name, domain, "Functional", functional_results, domain_dir)
+            if html_file:
+                html_files.append(html_file)
         
         if smoke_results:
-            self._generate_report(company_name, domain, "Smoke", smoke_results)
+            html_file = self._generate_report(company_name, domain, "Smoke", smoke_results, domain_dir)
+            if html_file:
+                html_files.append(html_file)
         
         if accessibility_results:
-            self._generate_report(company_name, domain, "Accessibility", accessibility_results)
+            html_file = self._generate_report(company_name, domain, "Accessibility", accessibility_results, domain_dir)
+            if html_file:
+                html_files.append(html_file)
         
         if performance_results:
-            self._generate_report(company_name, domain, "Performance", performance_results)
+            html_file = self._generate_report(company_name, domain, "Performance", performance_results, domain_dir)
+            if html_file:
+                html_files.append(html_file)
+        
+        # Convert HTML files to PDF
+        if html_files:
+            try:
+                # Try to get current event loop
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is already running, we need to schedule it
+                    # Create a new event loop in a thread
+                    import threading
+                    def run_in_thread():
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        new_loop.run_until_complete(self._convert_html_to_pdf(html_files, domain_dir))
+                        new_loop.close()
+                    thread = threading.Thread(target=run_in_thread)
+                    thread.start()
+                    thread.join()
+                else:
+                    loop.run_until_complete(self._convert_html_to_pdf(html_files, domain_dir))
+            except RuntimeError:
+                # No event loop, create new one
+                asyncio.run(self._convert_html_to_pdf(html_files, domain_dir))
     
     def _generate_report(self, company_name: str, domain: str, report_type: str, 
-                        results: List[TestResult]):
-        """Generate a single HTML report"""
+                        results: List[TestResult], domain_dir: Path) -> Path:
+        """
+        Generate a single HTML report
+        
+        Args:
+            company_name: Company name
+            domain: Domain name
+            report_type: Type of report (Functional, Smoke, etc.)
+            results: List of TestResult objects
+            domain_dir: Directory for domain-specific reports
+            
+        Returns:
+            Path to generated HTML file
+        """
         # Calculate statistics
         stats = self._calculate_stats(results)
         
@@ -74,14 +126,86 @@ class ReportGenerator:
         # Render template
         html_content = self._render_template(template_data, report_type)
         
-        # Save file
-        filename = f"{company_name.replace(' ', '_')}_{report_type}_Report.html"
-        filepath = self.output_dir / filename
+        # Save file with domain-based naming
+        domain_safe = self._sanitize_domain(domain)
+        filename = f"{domain_safe}_{report_type}_Report.html"
+        filepath = domain_dir / filename
         
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(html_content)
         
         logger.info(f"Generated {report_type} report: {filepath}")
+        return filepath
+    
+    def _sanitize_domain(self, domain: str) -> str:
+        """
+        Sanitize domain name for use in file/folder names
+        
+        Args:
+            domain: Domain string
+            
+        Returns:
+            Sanitized domain string safe for file system
+        """
+        # Replace invalid characters with underscores
+        sanitized = domain.replace(':', '_').replace('/', '_').replace('\\', '_')
+        sanitized = sanitized.replace(' ', '_').replace('.', '_')
+        # Remove multiple consecutive underscores
+        while '__' in sanitized:
+            sanitized = sanitized.replace('__', '_')
+        # Remove leading/trailing underscores
+        sanitized = sanitized.strip('_')
+        return sanitized
+    
+    async def _convert_html_to_pdf(self, html_files: List[Path], output_dir: Path):
+        """
+        Convert HTML files to PDF using Playwright
+        
+        Args:
+            html_files: List of HTML file paths to convert
+            output_dir: Directory to save PDF files
+        """
+        try:
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context()
+                page = await context.new_page()
+                
+                for html_file in html_files:
+                    try:
+                        # Read HTML file
+                        html_path = html_file.resolve()
+                        
+                        # Load HTML file
+                        await page.goto(f"file://{html_path}")
+                        await page.wait_for_load_state('networkidle')
+                        
+                        # Generate PDF filename
+                        pdf_filename = html_file.stem + '.pdf'
+                        pdf_path = output_dir / pdf_filename
+                        
+                        # Generate PDF
+                        await page.pdf(
+                            path=str(pdf_path),
+                            format='A4',
+                            print_background=True,
+                            margin={
+                                'top': '20mm',
+                                'right': '15mm',
+                                'bottom': '20mm',
+                                'left': '15mm'
+                            }
+                        )
+                        
+                        logger.info(f"Generated PDF: {pdf_path}")
+                        
+                    except Exception as e:
+                        logger.error(f"Error converting {html_file} to PDF: {e}")
+                
+                await browser.close()
+                
+        except Exception as e:
+            logger.error(f"Error during PDF conversion: {e}")
     
     def _calculate_stats(self, results: List[TestResult]) -> Dict[str, Any]:
         """Calculate statistics for report"""

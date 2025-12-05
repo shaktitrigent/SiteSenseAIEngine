@@ -8,6 +8,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Dict, List, Any
 
 from src.config_loader import ConfigLoader
 from src.excel_reader import ExcelReader
@@ -16,6 +17,7 @@ from src.test_generator import TestGenerator
 from src.test_runner import TestRunner
 from src.results_storage import ResultsStorage
 from src.report_generator import ReportGenerator
+from src.models import CompanyData
 
 # Configure logging
 logging.basicConfig(
@@ -68,6 +70,13 @@ Examples:
         type=str,
         default=None,
         help='Base output directory (overrides config)'
+    )
+    
+    parser.add_argument(
+        '--parallel',
+        type=int,
+        default=None,
+        help='Number of parallel instances to run (default: from config, max: 5). If URLs/companies < parallel, uses actual count.'
     )
     
     args = parser.parse_args()
@@ -142,24 +151,63 @@ Examples:
             all_test_cases[company.domain] = test_cases
             logger.info(f"Generated {len(test_cases)} test cases for {company.domain}")
         
-        # Step 4: Execute tests
+        # Step 4: Execute tests (with parallelism)
         logger.info(f"\n[4/6] Executing tests...")
-        test_runner = TestRunner(config, base_output)
-        all_results = {}
+
+        # Determine concurrency: CLI arg > config > default
+        browser_config = config.get('browser', {})
+        if args.parallel is not None:
+            max_concurrency = max(1, min(args.parallel, 5))  # Cap at 5
+        else:
+            max_concurrency = max(1, int(browser_config.get('concurrency', 2)))
         
-        try:
-            # Start browser once for all companies (performance optimization)
-            await test_runner.browser_manager.start()
-            
-            for company in companies:
+        # Limit concurrency to actual number of companies
+        total_companies = len(companies)
+        actual_concurrency = min(max_concurrency, total_companies)
+        logger.info(f"Using parallel execution: requested={max_concurrency}, actual={actual_concurrency} (based on {total_companies} companies)")
+        
+        # Also set URL-level concurrency in config for parallel URL execution within companies
+        # Use the same parallel setting, but limit to max 5
+        browser_config['url_concurrency'] = min(max_concurrency, 5)
+
+        all_results: Dict[str, List[Any]] = {}
+
+        semaphore = asyncio.Semaphore(actual_concurrency)
+
+        async def run_company_tests(company: CompanyData):
+            """
+            Run tests for a single company inside a bounded semaphore.
+            Each company gets its own TestRunner / BrowserManager so that
+            Playwright instances are isolated across parallel tasks.
+            """
+            async with semaphore:
                 logger.info(f"Running tests for {company.domain}...")
+                test_runner = TestRunner(config, base_output)
                 test_cases = all_test_cases[company.domain]
-                results = await test_runner.run_tests(company, test_cases)
-                all_results[company.domain] = results
-                logger.info(f"Completed {len(results)} tests for {company.domain}")
-        finally:
-            # Stop browser after all companies are processed
-            await test_runner.browser_manager.stop()
+
+                try:
+                    # Start browser for this company
+                    await test_runner.browser_manager.start()
+                    # Execute all tests for this company
+                    results = await test_runner.run_tests(company, test_cases)
+                    logger.info(f"Completed {len(results)} tests for {company.domain}")
+                    return company.domain, results
+                except Exception as e:
+                    logger.error(f"Error running tests for {company.domain}: {e}", exc_info=True)
+                    return company.domain, []
+                finally:
+                    # Ensure browser is stopped for this company
+                    try:
+                        await test_runner.browser_manager.stop()
+                    except Exception as stop_err:
+                        logger.debug(f"Error stopping browser for {company.domain}: {stop_err}")
+
+        # Launch tests for all companies in parallel with controlled concurrency
+        company_tasks = [run_company_tests(company) for company in companies]
+        results_per_company = await asyncio.gather(*company_tasks)
+
+        for domain, results in results_per_company:
+            all_results[domain] = results
         
         # Step 5: Store results
         logger.info(f"\n[5/6] Storing results...")
@@ -170,13 +218,13 @@ Examples:
             results_storage.save_results(company.company_name, company.domain, results)
         
         # Step 6: Generate reports
-        logger.info(f"\n[6/6] Generating HTML reports...")
+        logger.info(f"\n[6/6] Generating HTML reports and PDFs...")
         report_generator = ReportGenerator(reports_dir, config)
         
         for company in companies:
             results = all_results[company.domain]
             report_generator.generate_reports(company.company_name, company.domain, results)
-            logger.info(f"Generated reports for {company.company_name}")
+            logger.info(f"Generated reports (HTML + PDF) for {company.company_name}")
         
         # Summary
         logger.info("\n" + "=" * 60)

@@ -13,12 +13,13 @@ output:
 
 # Browser Settings
 browser:
-  headless: true
+  headless: false
   timeout: 30000  # milliseconds
   viewport:
     width: 1920
     height: 1080
-  concurrency: 2  # Number of parallel browser instances
+  concurrency: 2  # Number of parallel companies/domains to test (default: 2, max: 5)
+  url_concurrency: 1  # Number of parallel URLs to test within a company (default: 1 sequential, max: 5)
 
 # Site Analysis
 analysis:

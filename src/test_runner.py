@@ -93,35 +93,86 @@ class TestRunner:
                 tests_by_url[test_case.url] = []
             tests_by_url[test_case.url].append(test_case)
         
-        # Execute tests - each test navigates to ensure proper page state
-        for url, url_tests in tests_by_url.items():
-            for test_case in url_tests:
-                page = None
-                try:
-                    # Ensure browser is started
-                    if not self.browser_manager.context:
-                        await self.browser_manager.start()
-                    
-                    # Create new page (will handle context errors internally)
-                    page = await self.browser_manager.new_page()
-                    
-                    # Navigate for each test to ensure proper page state
-                    result = await self._execute_test(test_case, company, page, url, skip_navigation=False)
-                    results.append(result)
-                    
-                except Exception as e:
-                    logger.error(f"Error executing {test_case.test_id}: {e}")
-                    results.append(self._create_failed_result(
-                        test_case, company, url,
-                        f"Test execution error: {str(e)}",
-                        str(e)
-                    ))
-                finally:
-                    if page:
+        # Get URL-level concurrency from config (default: 1, meaning sequential)
+        browser_config = self.config.get('browser', {})
+        url_concurrency = max(1, int(browser_config.get('url_concurrency', 1)))
+        # Limit to actual number of URLs
+        url_concurrency = min(url_concurrency, len(tests_by_url))
+        
+        # Execute tests - run URLs in parallel if url_concurrency > 1
+        if url_concurrency > 1 and len(tests_by_url) > 1:
+            # Parallel execution at URL level
+            semaphore = asyncio.Semaphore(url_concurrency)
+            
+            async def run_url_tests(url: str, url_tests: List[TestCase]):
+                """Run all tests for a single URL"""
+                async with semaphore:
+                    url_results = []
+                    for test_case in url_tests:
+                        page = None
                         try:
-                            await page.close()
+                            # Ensure browser is started
+                            if not self.browser_manager.context:
+                                await self.browser_manager.start()
+                            
+                            # Create new page (will handle context errors internally)
+                            page = await self.browser_manager.new_page()
+                            
+                            # Navigate for each test to ensure proper page state
+                            result = await self._execute_test(test_case, company, page, url, skip_navigation=False)
+                            url_results.append(result)
+                            
                         except Exception as e:
-                            logger.debug(f"Error closing page: {e}")
+                            logger.error(f"Error executing {test_case.test_id}: {e}")
+                            url_results.append(self._create_failed_result(
+                                test_case, company, url,
+                                f"Test execution error: {str(e)}",
+                                str(e)
+                            ))
+                        finally:
+                            if page:
+                                try:
+                                    await page.close()
+                                except Exception as e:
+                                    logger.debug(f"Error closing page: {e}")
+                    return url_results
+            
+            # Run all URLs in parallel
+            url_tasks = [run_url_tests(url, url_tests) for url, url_tests in tests_by_url.items()]
+            url_results_list = await asyncio.gather(*url_tasks)
+            # Flatten results
+            for url_results in url_results_list:
+                results.extend(url_results)
+        else:
+            # Sequential execution (original behavior)
+            for url, url_tests in tests_by_url.items():
+                for test_case in url_tests:
+                    page = None
+                    try:
+                        # Ensure browser is started
+                        if not self.browser_manager.context:
+                            await self.browser_manager.start()
+                        
+                        # Create new page (will handle context errors internally)
+                        page = await self.browser_manager.new_page()
+                        
+                        # Navigate for each test to ensure proper page state
+                        result = await self._execute_test(test_case, company, page, url, skip_navigation=False)
+                        results.append(result)
+                        
+                    except Exception as e:
+                        logger.error(f"Error executing {test_case.test_id}: {e}")
+                        results.append(self._create_failed_result(
+                            test_case, company, url,
+                            f"Test execution error: {str(e)}",
+                            str(e)
+                        ))
+                    finally:
+                        if page:
+                            try:
+                                await page.close()
+                            except Exception as e:
+                                logger.debug(f"Error closing page: {e}")
         
         return results
     
