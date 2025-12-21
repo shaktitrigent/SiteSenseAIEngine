@@ -44,6 +44,8 @@ python -m venv venv
 
 # 2. Install dependencies
 pip install -r requirements.txt
+
+# 3. Install Playwright browsers (required!)
 playwright install chromium
 
 # 3. Create example Excel file (includes Trigent.com)
@@ -73,6 +75,8 @@ Excel File → URL Extraction → Site Analysis → Test Generation → Test Exe
 - Python 3.9 or higher
 - pip package manager
 - Git (optional, for cloning)
+- Internet connection (required for installing Playwright browsers)
+- **Note:** Playwright requires separate browser installation after installing Python packages (see Step 6)
 
 ### Step-by-Step Setup
 
@@ -126,7 +130,7 @@ pip install -r requirements.txt
 ```
 
 This will install:
-- playwright
+- playwright (Python package - **note:** browsers must be installed separately in Step 6)
 - pandas
 - openpyxl
 - pyyaml
@@ -137,20 +141,60 @@ This will install:
 
 #### 6. Install Playwright Browsers
 
+Playwright requires browser binaries to be installed separately. This project uses Chromium by default.
+
+**Install Chromium (Recommended for this project):**
 ```bash
 playwright install chromium
 ```
 
-**Note:** On Linux, you may need to install system dependencies:
+**Install All Browsers (Optional):**
+If you want to test with multiple browsers (Chromium, Firefox, WebKit):
+```bash
+playwright install
+```
+
+**Install Specific Browser:**
+```bash
+playwright install chromium    # Chromium (default)
+playwright install firefox     # Firefox
+playwright install webkit      # WebKit (Safari)
+```
+
+**System Dependencies:**
+
+**On Linux**, you may need to install system dependencies:
 ```bash
 playwright install --with-deps chromium
 ```
 
+**On Windows**, Playwright will automatically download required dependencies. If you encounter issues:
+- Ensure you have Windows 10 or later
+- Install [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe) if needed
+
+**On macOS**, Playwright will automatically download required dependencies. If you encounter issues:
+- Ensure you have macOS 10.15 (Catalina) or later
+- Install Xcode Command Line Tools: `xcode-select --install`
+
+**Verify Browser Installation:**
+```bash
+playwright install --help      # Check available options
+playwright --version           # Check Playwright version
+```
+
 #### 7. Verify Installation
 
+**Verify Python Dependencies:**
 ```bash
 python -c "import playwright; import pandas; import yaml; print('All dependencies installed successfully!')"
 ```
+
+**Verify Playwright Browsers:**
+```bash
+python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); browser = p.chromium.launch(); browser.close(); print('Playwright browsers are working!')"
+```
+
+**Note:** If you see errors about missing browsers, run `playwright install chromium` again.
 
 ### Deactivate Virtual Environment
 
@@ -534,7 +578,13 @@ The system is designed for easy extension:
 ### Browser Installation Issues
 
 **Playwright browsers fail to install:**
+
+**General Solution:**
 ```bash
+# Force reinstall browsers
+playwright install chromium --force
+
+# Or install with system dependencies (Linux)
 playwright install --with-deps chromium
 ```
 
@@ -543,13 +593,56 @@ playwright install --with-deps chromium
 # Ubuntu/Debian
 sudo apt-get install -y libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2
 
+# Fedora/CentOS/RHEL
+sudo yum install -y nss atk at-spi2-atk cups-libs libdrm libxkbcommon libXcomposite libXdamage libXfixes libXrandr mesa-libgbm alsa-lib
+
 # Then install Playwright
 playwright install chromium
 ```
 
+**On Windows, if you get errors:**
+```bash
+# Ensure you have the latest Playwright version
+pip install --upgrade playwright
+
+# Reinstall browsers
+playwright install chromium --force
+
+# If you see "Executable doesn't exist" errors, try:
+playwright install chromium
+```
+
+**On macOS, if you get errors:**
+```bash
+# Install Xcode Command Line Tools if missing
+xcode-select --install
+
+# Reinstall browsers
+playwright install chromium --force
+```
+
 **Browser not found error:**
-- Ensure Playwright is installed: `pip show playwright`
+- Ensure Playwright Python package is installed: `pip show playwright`
+- Verify browsers are installed: `playwright install --help`
 - Reinstall browsers: `playwright install chromium --force`
+- Check Playwright version: `playwright --version`
+- If using virtual environment, ensure it's activated before installing browsers
+
+**"Executable doesn't exist" or "Playwright browsers are not installed" error:**
+This error appears when Playwright Python package is installed but browser binaries are missing:
+```bash
+# Solution: Install the browsers
+playwright install chromium
+
+# Verify installation
+python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); browser = p.chromium.launch(); browser.close(); print('OK')"
+```
+
+**Browser installation takes too long or fails:**
+- Check internet connection (browsers are downloaded from the internet)
+- Try installing with verbose output: `playwright install chromium --verbose`
+- If behind a proxy, configure it: `set HTTPS_PROXY=your-proxy-url` (Windows) or `export HTTPS_PROXY=your-proxy-url` (Linux/macOS)
+- Try installing from a different network or use a VPN
 
 ### Excel Reading Errors
 
