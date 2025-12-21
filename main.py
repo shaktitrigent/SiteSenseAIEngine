@@ -7,6 +7,7 @@ import asyncio
 import argparse
 import logging
 import sys
+import io
 from pathlib import Path
 from typing import Dict, List, Any
 
@@ -18,18 +19,75 @@ from src.test_runner import TestRunner
 from src.results_storage import ResultsStorage
 from src.report_generator import ReportGenerator
 from src.models import CompanyData
+import re
 
-# Configure logging
+# Configure logging with UTF-8 encoding to handle Unicode characters
+class UTF8StreamHandler(logging.StreamHandler):
+    """StreamHandler that uses UTF-8 encoding for Windows compatibility"""
+    def __init__(self, stream=None):
+        if stream is None:
+            stream = sys.stdout
+        # Wrap stream with UTF-8 encoding for Windows
+        if sys.platform == 'win32' and hasattr(stream, 'reconfigure'):
+            try:
+                stream.reconfigure(encoding='utf-8', errors='replace')
+            except (AttributeError, ValueError):
+                # Fallback if reconfigure fails
+                pass
+        super().__init__(stream)
+    
+    def emit(self, record):
+        """Emit a record, handling Unicode encoding errors gracefully"""
+        try:
+            msg = self.format(record)
+            stream = self.stream
+            # Encode to UTF-8 and replace any problematic characters
+            if sys.platform == 'win32':
+                try:
+                    stream.write(msg + self.terminator)
+                except UnicodeEncodeError:
+                    # Fallback: encode to UTF-8 and replace errors
+                    stream.buffer.write((msg + self.terminator).encode('utf-8', errors='replace'))
+                    stream.flush()
+            else:
+                stream.write(msg + self.terminator)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('webtest.log')
+        UTF8StreamHandler(sys.stdout),
+        logging.FileHandler('webtest.log', encoding='utf-8')
     ]
 )
 
 logger = logging.getLogger(__name__)
+
+
+def is_playwright_browser_error(error: Exception) -> bool:
+    """Check if error is related to missing Playwright browsers"""
+    error_msg = str(error)
+    error_type = type(error).__name__
+    return ("Executable doesn't exist" in error_msg or 
+            "playwright install" in error_msg.lower() or
+            "BrowserType.launch" in error_msg or
+            "Playwright browsers are not installed" in error_msg or
+            (error_type == "RuntimeError" and "Playwright browsers" in error_msg))
+
+
+def sanitize_error_message(error: Exception) -> str:
+    """Remove Unicode box-drawing characters from error messages"""
+    error_msg = str(error)
+    # Remove Unicode box-drawing characters (╔, ║, ╚, ═, etc.)
+    sanitized = re.sub(r'[╔╗╚╝║═╠╣╦╩╬]', '', error_msg)
+    # Remove multiple consecutive newlines and whitespace
+    sanitized = re.sub(r'\n\s*\n+', '\n', sanitized)
+    # Remove the Playwright installation message block
+    sanitized = re.sub(r'Looks like Playwright.*?Playwright Team', '', sanitized, flags=re.DOTALL)
+    return sanitized.strip()
 
 
 async def main():
@@ -193,7 +251,13 @@ Examples:
                     logger.info(f"Completed {len(results)} tests for {company.domain}")
                     return company.domain, results
                 except Exception as e:
-                    logger.error(f"Error running tests for {company.domain}: {e}", exc_info=True)
+                    # Handle Playwright browser installation errors gracefully
+                    if is_playwright_browser_error(e):
+                        sanitized_msg = sanitize_error_message(e)
+                        logger.error(f"Error running tests for {company.domain}: {sanitized_msg}")
+                        logger.error("Please install Playwright browsers by running: playwright install chromium")
+                    else:
+                        logger.error(f"Error running tests for {company.domain}: {e}", exc_info=True)
                     return company.domain, []
                 finally:
                     # Ensure browser is stopped for this company

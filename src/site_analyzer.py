@@ -64,7 +64,14 @@ class SiteAnalyzer:
                           f"pages={len(structure.key_pages)}, forms={len(structure.forms)}")
                 
         except Exception as e:
-            logger.error(f"Error analyzing {company.domain}: {e}")
+            error_msg = str(e)
+            # Check if this is a Playwright browser installation issue
+            if "Executable doesn't exist" in error_msg or "playwright install" in error_msg.lower():
+                logger.error(f"Error analyzing {company.domain}: Playwright browsers are not installed.")
+                logger.error("Please run: playwright install chromium")
+                # Don't raise - just return empty structure to allow test generation to continue
+            else:
+                logger.error(f"Error analyzing {company.domain}: {error_msg}")
         
         return structure
     

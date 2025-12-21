@@ -56,7 +56,18 @@ class BrowserManager:
                         ignore_https_errors=True
                     )
         except Exception as e:
-            logger.error(f"Error starting browser: {e}")
+            error_msg = str(e)
+            # Check if this is a Playwright browser installation issue
+            if "Executable doesn't exist" in error_msg or "playwright install" in error_msg.lower():
+                logger.error("Playwright browsers are not installed. Please run: playwright install")
+                logger.error("You can install browsers by running: playwright install chromium")
+                # Raise a cleaner exception without Unicode characters
+                raise RuntimeError(
+                    "Playwright browsers are not installed. "
+                    "Please run: playwright install chromium"
+                ) from None
+            else:
+                logger.error(f"Error starting browser: {error_msg}")
             # Reset and try again
             self.context = None
             self.browser = None
