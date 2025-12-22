@@ -201,13 +201,18 @@ Examples:
         # Step 3: Generate tests
         logger.info(f"\n[3/6] Generating test cases...")
         test_generator = TestGenerator(config)
-        all_test_cases = {}
+        all_test_cases = {}  # All identified test cases
+        tests_to_execute = {}  # Tests selected for execution (30%)
+        total_test_counts = {}  # AI-identified total counts
         
         for company in companies:
             structure = company_structures[company.domain]
-            test_cases = test_generator.generate_tests(company, structure)
-            all_test_cases[company.domain] = test_cases
-            logger.info(f"Generated {len(test_cases)} test cases for {company.domain}")
+            all_tests, execute_tests, counts = test_generator.generate_tests(company, structure)
+            all_test_cases[company.domain] = all_tests
+            tests_to_execute[company.domain] = execute_tests
+            total_test_counts[company.domain] = counts
+            logger.info(f"Generated {len(all_tests)} total test cases for {company.domain}")
+            logger.info(f"Selected {len(execute_tests)} tests ({len(execute_tests)/len(all_tests)*100:.1f}%) for execution")
         
         # Step 4: Execute tests (with parallelism)
         logger.info(f"\n[4/6] Executing tests...")
@@ -246,7 +251,8 @@ Examples:
                 try:
                     # Start browser for this company
                     await test_runner.browser_manager.start()
-                    # Execute all tests for this company
+                    # Execute only selected tests (30%) for this company
+                    test_cases = tests_to_execute[company.domain]
                     results = await test_runner.run_tests(company, test_cases)
                     logger.info(f"Completed {len(results)} tests for {company.domain}")
                     return company.domain, results
@@ -287,7 +293,15 @@ Examples:
         
         for company in companies:
             results = all_results[company.domain]
-            report_generator.generate_reports(company.company_name, company.domain, results)
+            total_counts = total_test_counts[company.domain]
+            all_tests = all_test_cases[company.domain]
+            report_generator.generate_reports(
+                company.company_name, 
+                company.domain, 
+                results,
+                total_test_counts=total_counts,
+                total_identified_tests=len(all_tests)
+            )
             logger.info(f"Generated reports (HTML + PDF) for {company.company_name}")
         
         # Summary

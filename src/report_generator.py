@@ -7,6 +7,7 @@ from typing import List, Dict, Any
 from jinja2 import Template
 import logging
 import asyncio
+import os
 from playwright.async_api import async_playwright
 
 from src.models import TestResult, TestType
@@ -29,14 +30,17 @@ class ReportGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.config = config or {}
     
-    def generate_reports(self, company_name: str, domain: str, results: List[TestResult]):
+    def generate_reports(self, company_name: str, domain: str, results: List[TestResult],
+                        total_test_counts: Dict[str, int] = None, total_identified_tests: int = None):
         """
         Generate all 4 HTML reports for a company and convert to PDF
         
         Args:
             company_name: Company name
             domain: Domain name
-            results: List of TestResult objects
+            results: List of TestResult objects (executed tests only)
+            total_test_counts: Dictionary with total test counts by type (from AI)
+            total_identified_tests: Total number of test cases identified
         """
         # Create domain-specific folder
         domain_folder = self._sanitize_domain(domain)
@@ -51,24 +55,22 @@ class ReportGenerator:
         
         html_files = []
         
-        # Generate each report
+        # Generate each report (only Functional and Accessibility per requirements)
         if functional_results:
-            html_file = self._generate_report(company_name, domain, "Functional", functional_results, domain_dir)
-            if html_file:
-                html_files.append(html_file)
-        
-        if smoke_results:
-            html_file = self._generate_report(company_name, domain, "Smoke", smoke_results, domain_dir)
+            functional_total = total_test_counts.get('functional', len(functional_results)) if total_test_counts else len(functional_results)
+            html_file = self._generate_report(
+                company_name, domain, "Functional", functional_results, domain_dir,
+                total_identified=functional_total, total_executed=len(functional_results)
+            )
             if html_file:
                 html_files.append(html_file)
         
         if accessibility_results:
-            html_file = self._generate_report(company_name, domain, "Accessibility", accessibility_results, domain_dir)
-            if html_file:
-                html_files.append(html_file)
-        
-        if performance_results:
-            html_file = self._generate_report(company_name, domain, "Performance", performance_results, domain_dir)
+            accessibility_total = total_test_counts.get('accessibility', len(accessibility_results)) if total_test_counts else len(accessibility_results)
+            html_file = self._generate_report(
+                company_name, domain, "Accessibility", accessibility_results, domain_dir,
+                total_identified=accessibility_total, total_executed=len(accessibility_results)
+            )
             if html_file:
                 html_files.append(html_file)
         
@@ -96,22 +98,37 @@ class ReportGenerator:
                 asyncio.run(self._convert_html_to_pdf(html_files, domain_dir))
     
     def _generate_report(self, company_name: str, domain: str, report_type: str, 
-                        results: List[TestResult], domain_dir: Path) -> Path:
+                        results: List[TestResult], domain_dir: Path,
+                        total_identified: int = None, total_executed: int = None) -> Path:
         """
         Generate a single HTML report
         
         Args:
             company_name: Company name
             domain: Domain name
-            report_type: Type of report (Functional, Smoke, etc.)
-            results: List of TestResult objects
+            report_type: Type of report (Functional, Accessibility, etc.)
+            results: List of TestResult objects (executed tests)
             domain_dir: Directory for domain-specific reports
+            total_identified: Total number of test cases identified
+            total_executed: Total number of test cases executed
             
         Returns:
             Path to generated HTML file
         """
         # Calculate statistics
         stats = self._calculate_stats(results)
+        
+        # Add total identified vs executed info
+        if total_identified is None:
+            total_identified = len(results)
+        if total_executed is None:
+            total_executed = len(results)
+        
+        stats['total_identified'] = total_identified
+        stats['total_executed'] = total_executed
+        
+        # Copy logo to report directory and get path
+        logo_path = self._copy_logo_to_report_dir(domain_dir)
         
         # Prepare data for template
         template_data = {
@@ -120,7 +137,8 @@ class ReportGenerator:
             'report_type': report_type,
             'stats': stats,
             'results': results,
-            'p1_failures': [r for r in results if r.severity.value == 'P1' and r.status.value == 'fail']
+            'p1_failures': [r for r in results if r.severity.value == 'P1' and r.status.value == 'fail'],
+            'logo_path': logo_path
         }
         
         # Render template
@@ -157,6 +175,67 @@ class ReportGenerator:
         sanitized = sanitized.strip('_')
         return sanitized
     
+    def _copy_logo_to_report_dir(self, report_dir: Path) -> str:
+        """
+        Copy logo to report directory and return base64 data URI
+        
+        Args:
+            report_dir: Directory where report is saved
+            
+        Returns:
+            Base64 data URI for logo image
+        """
+        import shutil
+        import base64
+        
+        # Look for logo in assets directory
+        project_root = Path(__file__).parent.parent
+        assets_dir = project_root / "assets"
+        logo_file = assets_dir / "trigent-logo.png"
+        
+        # Try alternative locations if primary not found
+        if not logo_file.exists():
+            alt_locations = [
+                assets_dir / "trigent-logo.jpg",
+                assets_dir / "logo.png",
+                assets_dir / "logo.jpg",
+            ]
+            
+            for alt_path in alt_locations:
+                if alt_path.exists():
+                    logo_file = alt_path
+                    break
+        
+        # If logo found, embed as base64 data URI
+        if logo_file.exists():
+            try:
+                # Copy logo to report directory
+                dest_logo = report_dir / logo_file.name
+                shutil.copy2(logo_file, dest_logo)
+                
+                # Create base64 data URI for embedding
+                with open(logo_file, 'rb') as f:
+                    logo_data = f.read()
+                    logo_base64 = base64.b64encode(logo_data).decode('utf-8')
+                    
+                    # Determine MIME type
+                    suffix = logo_file.suffix.lower()
+                    if suffix == '.png':
+                        mime_type = 'image/png'
+                    elif suffix in ['.jpg', '.jpeg']:
+                        mime_type = 'image/jpeg'
+                    else:
+                        mime_type = 'image/png'
+                    
+                    return f"data:{mime_type};base64,{logo_base64}"
+                    
+            except Exception as e:
+                logger.error(f"Error loading logo: {e}")
+                return ""
+        else:
+            logger.warning(f"Trigent logo not found at {assets_dir / 'trigent-logo.png'}")
+            return ""
+    
     async def _convert_html_to_pdf(self, html_files: List[Path], output_dir: Path):
         """
         Convert HTML files to PDF using Playwright
@@ -184,11 +263,15 @@ class ReportGenerator:
                         pdf_filename = html_file.stem + '.pdf'
                         pdf_path = output_dir / pdf_filename
                         
-                        # Generate PDF
+                        # Wait for watermark to be rendered
+                        await page.wait_for_selector('.sample-watermark', state='attached', timeout=5000)
+                        
+                        # Generate PDF with background graphics enabled
                         await page.pdf(
                             path=str(pdf_path),
                             format='A4',
                             print_background=True,
+                            prefer_css_page_size=False,
                             margin={
                                 'top': '20mm',
                                 'right': '15mm',
@@ -264,19 +347,78 @@ class ReportGenerator:
             color: #333;
             background: #f5f5f5;
             padding: 20px;
+            position: relative;
         }
+        /* Sample Watermark - appears on all pages (clearly visible) */
+        .sample-watermark {
+            position: fixed;
+            bottom: 30%;
+            left: 8%;
+            transform: rotate(45deg);
+            transform-origin: bottom left;
+            font-size: 180px;
+            font-weight: 400;
+            color: rgba(128, 128, 128, 0.25);
+            z-index: 0;
+            pointer-events: none;
+            letter-spacing: 40px;
+            white-space: nowrap;
+            user-select: none;
+            -webkit-user-select: none;
+            font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+            text-transform: uppercase;
+        }
+        
+        /* Also use pseudo-element for browser view */
+        body::before {
+            content: 'SAMPLE';
+            position: fixed;
+            bottom: 30%;
+            left: 8%;
+            transform: rotate(45deg);
+            transform-origin: bottom left;
+            font-size: 180px;
+            font-weight: 400;
+            color: rgba(128, 128, 128, 0.25);
+            z-index: 0;
+            pointer-events: none;
+            letter-spacing: 40px;
+            white-space: nowrap;
+            user-select: none;
+            font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+            text-transform: uppercase;
+        }
+        
         .container {
             max-width: 1200px;
             margin: 0 auto;
             background: white;
             padding: 30px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: relative;
+            z-index: 1;
+        }
+        /* Trigent Logo */
+        .trigent-logo {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            width: 50px;
+            height: 50px;
+            z-index: 10;
+        }
+        .trigent-logo img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
         }
         h1 {
             color: #2c3e50;
             border-bottom: 3px solid #3498db;
             padding-bottom: 10px;
             margin-bottom: 20px;
+            padding-right: 60px; /* Space for logo */
         }
         .header-info {
             background: #ecf0f1;
@@ -286,6 +428,51 @@ class ReportGenerator:
         }
         .header-info p {
             margin: 5px 0;
+        }
+        /* Coverage Summary Box */
+        .coverage-summary {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        .coverage-summary h2 {
+            color: #856404;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+        .coverage-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .coverage-stat {
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #ffc107;
+        }
+        .coverage-stat strong {
+            display: block;
+            font-size: 24px;
+            color: #856404;
+            margin-bottom: 5px;
+        }
+        .coverage-stat span {
+            color: #666;
+            font-size: 14px;
+        }
+        .sample-notice {
+            background: #e7f3ff;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+        }
+        .sample-notice strong {
+            color: #1976D2;
         }
         .summary {
             display: grid;
@@ -384,14 +571,84 @@ class ReportGenerator:
             margin-bottom: 10px;
         }
         @media print {
-            body { background: white; }
-            .container { box-shadow: none; }
+            body { 
+                background: white;
+                position: relative;
+            }
+            .container { 
+                box-shadow: none;
+            }
+            /* Ensure watermark appears clearly on all printed pages */
+            .sample-watermark {
+                position: fixed !important;
+                bottom: 30% !important;
+                left: 8% !important;
+                transform: rotate(45deg) !important;
+                transform-origin: bottom left !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                color: rgba(128, 128, 128, 0.30) !important;
+                font-size: 180px !important;
+                font-weight: 400 !important;
+                display: block !important;
+                visibility: visible !important;
+                letter-spacing: 40px !important;
+                text-transform: uppercase !important;
+                opacity: 1 !important;
+            }
+            body::before {
+                position: fixed !important;
+                bottom: 30% !important;
+                left: 8% !important;
+                transform: rotate(45deg) !important;
+                transform-origin: bottom left !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                color: rgba(128, 128, 128, 0.30) !important;
+                font-size: 180px !important;
+                font-weight: 400 !important;
+                display: block !important;
+                visibility: visible !important;
+                letter-spacing: 40px !important;
+                text-transform: uppercase !important;
+                opacity: 1 !important;
+            }
         }
+        
     </style>
 </head>
 <body>
+    <div class="sample-watermark">SAMPLE</div>
     <div class="container">
+        <div class="trigent-logo">
+            <img src="{{ logo_path }}" alt="Trigent Logo" />
+        </div>
         <h1>{{ report_type }} Test Report</h1>
+        
+        <div class="sample-notice">
+            <strong>📋 Sample Report:</strong> This report shows a sample of test results. 
+            A comprehensive test suite with {{ stats.total_identified }} total test cases was identified for complete coverage. 
+            Only {{ stats.total_executed }} high-impact test cases ({{ (stats.total_executed / stats.total_identified * 100) | round(1) }}%) were executed in this sample. 
+            Contact Trigent to request full test coverage and execution.
+        </div>
+        
+        <div class="coverage-summary">
+            <h2>Test Coverage Summary</h2>
+            <div class="coverage-stats">
+                <div class="coverage-stat">
+                    <strong>{{ stats.total_identified }}</strong>
+                    <span>Total Test Cases Identified</span>
+                </div>
+                <div class="coverage-stat">
+                    <strong>{{ stats.total_executed }}</strong>
+                    <span>Test Cases Executed ({{ (stats.total_executed / stats.total_identified * 100) | round(1) }}%)</span>
+                </div>
+                <div class="coverage-stat">
+                    <strong>{{ stats.total_identified - stats.total_executed }}</strong>
+                    <span>Additional Tests Available</span>
+                </div>
+            </div>
+        </div>
         
         <div class="header-info">
             <p><strong>Company:</strong> {{ company_name }}</p>
@@ -446,9 +703,10 @@ class ReportGenerator:
         {% endfor %}
         {% endif %}
         
-        <h2 style="margin-top: 30px;">Detailed Results</h2>
+        <h2 style="margin-top: 30px;">Executed Test Results</h2>
         <p style="margin-bottom: 15px; color: #7f8c8d;">
-            This section provides comprehensive details for each test case executed, including test descriptions, execution status, severity levels, and detailed summaries of results.
+            The following results are for the {{ stats.total_executed }} test cases executed in this sample. 
+            Results show what issues were found and their potential impact if not addressed.
         </p>
         <table>
             <thead>

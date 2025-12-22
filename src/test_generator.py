@@ -2,10 +2,11 @@
 Test case generator based on site analysis
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import logging
 
 from src.models import TestCase, TestType, Severity, CompanyData, SiteStructure
+from src.ai_coverage_identifier import AICoverageIdentifier
 
 logger = logging.getLogger(__name__)
 
@@ -26,43 +27,109 @@ class TestGenerator:
         self.enable_accessibility = self.config.get('test_generation', {}).get('enable_accessibility', True)
         self.enable_performance = self.config.get('test_generation', {}).get('enable_performance', True)
         self.enable_uiux = self.config.get('test_generation', {}).get('enable_uiux', True)
+        
+        # Initialize AI coverage identifier
+        self.ai_coverage = AICoverageIdentifier(config)
+        
+        # Execution percentage (30% for credentializing reports)
+        self.execution_percentage = self.config.get('test_generation', {}).get('execution_percentage', 0.3)
     
-    def generate_tests(self, company: CompanyData, structure: SiteStructure) -> List[TestCase]:
+    def generate_tests(self, company: CompanyData, structure: SiteStructure) -> Tuple[List[TestCase], List[TestCase], Dict[str, int]]:
         """
         Generate test cases for a company based on site structure
+        Uses AI to identify total coverage, then selects 30% for execution
         
         Args:
             company: CompanyData object
             structure: SiteStructure object from analysis
             
         Returns:
-            List of TestCase objects
+            Tuple of:
+            - List of all TestCase objects (total identified)
+            - List of TestCase objects to execute (30% high-impact)
+            - Dictionary with total test counts by type
         """
-        test_cases = []
+        # Step 1: Identify total test coverage using AI
+        total_counts = self.ai_coverage.identify_total_test_cases(company, structure)
+        logger.info(f"AI identified total test coverage: {total_counts}")
+        
+        # Step 2: Generate all functional and accessibility tests (for credentializing)
+        all_test_cases = []
         
         for url in company.urls:
-            # Smoke tests
-            if self.enable_smoke:
-                test_cases.extend(self._generate_smoke_tests(url, company))
-            
-            # Functional tests
+            # Only generate Functional and Accessibility tests (as per requirements)
             if self.enable_functional:
-                test_cases.extend(self._generate_functional_tests(url, company, structure))
+                all_test_cases.extend(self._generate_functional_tests(url, company, structure))
             
-            # Accessibility tests
             if self.enable_accessibility:
-                test_cases.extend(self._generate_accessibility_tests(url, company))
-            
-            # Performance tests
-            if self.enable_performance:
-                test_cases.extend(self._generate_performance_tests(url, company))
-            
-            # UI/UX tests
-            if self.enable_uiux:
-                test_cases.extend(self._generate_uiux_tests(url, company))
+                all_test_cases.extend(self._generate_accessibility_tests(url, company))
         
-        logger.info(f"Generated {len(test_cases)} test cases for {company.domain}")
-        return test_cases
+        # Step 3: Select 30% high-impact tests for execution
+        tests_to_execute = self._select_tests_for_execution(all_test_cases, total_counts)
+        
+        logger.info(f"Generated {len(all_test_cases)} total test cases for {company.domain}")
+        logger.info(f"Selected {len(tests_to_execute)} tests ({len(tests_to_execute)/len(all_test_cases)*100:.1f}%) for execution")
+        
+        return all_test_cases, tests_to_execute, total_counts
+    
+    def _select_tests_for_execution(self, all_tests: List[TestCase], total_counts: Dict[str, int]) -> List[TestCase]:
+        """
+        Select 30% of tests for execution, prioritizing high-impact tests
+        
+        Args:
+            all_tests: All generated test cases
+            total_counts: Total test counts identified by AI
+            
+        Returns:
+            List of test cases to execute (30% of total, high-impact)
+        """
+        # Separate by type
+        functional_tests = [t for t in all_tests if t.test_type == TestType.FUNCTIONAL]
+        accessibility_tests = [t for t in all_tests if t.test_type == TestType.ACCESSIBILITY]
+        
+        # Calculate how many to execute (30% of each type)
+        functional_target = max(1, int(len(functional_tests) * self.execution_percentage))
+        accessibility_target = max(1, int(len(accessibility_tests) * self.execution_percentage))
+        
+        # Prioritize: P1 > P2 > P3, then by category importance
+        def test_priority(test: TestCase) -> tuple:
+            # Priority: (severity_weight, category_importance)
+            severity_weight = {'P1': 3, 'P2': 2, 'P3': 1}[test.severity.value]
+            
+            # Category importance (higher = more important)
+            category_importance = {
+                'Navigation': 10,
+                'Form Validation': 9,
+                'CTA': 9,
+                'WCAG Compliance': 10,
+                'Keyboard Navigation': 9,
+                'Color Contrast': 8,
+                'Images': 8,
+                'E-commerce': 10,
+                'Authentication': 10,
+                'Links': 7,
+                'Search': 7,
+                'Form Labels': 8,
+                'ARIA Attributes': 7,
+                'Focus Indicators': 7,
+            }.get(test.category, 5)
+            
+            return (-severity_weight, -category_importance)  # Negative for descending sort
+        
+        # Select functional tests
+        functional_tests.sort(key=test_priority)
+        selected_functional = functional_tests[:functional_target]
+        
+        # Select accessibility tests
+        accessibility_tests.sort(key=test_priority)
+        selected_accessibility = accessibility_tests[:accessibility_target]
+        
+        # Combine selected tests
+        selected = selected_functional + selected_accessibility
+        
+        logger.info(f"Selected {len(selected_functional)} functional and {len(selected_accessibility)} accessibility tests for execution")
+        
+        return selected
     
     def _generate_smoke_tests(self, url: str, company: CompanyData) -> List[TestCase]:
         """Generate smoke tests - at least 10 comprehensive tests"""
@@ -207,7 +274,7 @@ class TestGenerator:
                 test_id=f"FUNC-{100+i}-{company.domain}",
                 test_type=TestType.FUNCTIONAL,
                 category="Form Validation",
-                description=f"Verify form {i+1} on the page has proper input validation, error handling, and submission functionality. Forms should validate required fields, format inputs correctly, and provide clear error messages to users.",
+                description=f"Check if form {i+1} works correctly. If forms are broken, users cannot submit information, leading to lost leads or failed transactions.",
                 severity=Severity.P2,
                 url=url,
                 metadata={'form': structure.forms[i] if i < form_count else None}
@@ -221,7 +288,7 @@ class TestGenerator:
                 test_id=f"FUNC-{200+i}-{company.domain}",
                 test_type=TestType.FUNCTIONAL,
                 category="CTA",
-                description=f"Verify call-to-action button '{cta_text}' is visible, clickable, and leads to the intended destination. CTAs are critical conversion points and must function correctly to drive user actions.",
+                description=f"Check if '{cta_text}' button works. If CTAs are broken, users cannot complete important actions like signing up or making purchases.",
                 severity=Severity.P1 if i < cta_count and ('buy' in cta_text.lower() or 'checkout' in cta_text.lower() or 'sign up' in cta_text.lower()) else Severity.P2,
                 url=url,
                 metadata={'cta': structure.ctas[i] if i < cta_count else None}
@@ -384,7 +451,7 @@ class TestGenerator:
                 test_id=f"A11Y-001-{company.domain}",
                 test_type=TestType.ACCESSIBILITY,
                 category="WCAG Compliance",
-                description=f"Run comprehensive WCAG 2.1 Level AA compliance check on {url}. This test validates adherence to web accessibility standards, ensuring the site is usable by people with disabilities including visual, auditory, motor, and cognitive impairments.",
+                description=f"Check if the website meets accessibility standards. If accessibility is poor, people with disabilities cannot use the site, which may violate legal requirements and exclude potential customers.",
                 severity=Severity.P1,
                 url=url
             ),
@@ -392,7 +459,7 @@ class TestGenerator:
                 test_id=f"A11Y-002-{company.domain}",
                 test_type=TestType.ACCESSIBILITY,
                 category="Images",
-                description=f"Verify all images on {url} have appropriate alt text attributes. Alt text is essential for screen reader users to understand image content and context. Decorative images should have empty alt attributes, while informative images need descriptive text.",
+                description=f"Check if images have alt text. Without alt text, screen reader users cannot understand what images show, making the site unusable for visually impaired users.",
                 severity=Severity.P1,
                 url=url
             ),

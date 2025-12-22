@@ -27,13 +27,8 @@ analysis:
   max_pages: 10  # Maximum pages to analyze per domain
   timeout: 10000  # milliseconds per page
 
-# Test Generation
-test_generation:
-  enable_functional: true
-  enable_smoke: true
-  enable_accessibility: true
-  enable_performance: true
-  enable_uiux: true
+# Test Generation (Credentializing Mode - only Functional + Accessibility)
+# Note: For credentializing reports, only Functional and Accessibility tests are used
 
 # Performance Thresholds
 performance:
@@ -80,4 +75,20 @@ reporting:
   include_screenshots: true
   chart_theme: "light"
   pdf_friendly: true
+
+# AI Configuration
+ai:
+  gemini_api_key: null  # Set via GEMINI_API_KEY environment variable or here
+  # If API key is not provided, system will use fallback estimation
+
+# Test Generation (Credentializing Mode)
+# For credentializing reports: only Functional + Accessibility tests are used
+# Only 30% of identified tests are executed (high-impact, most relevant)
+test_generation:
+  enable_functional: true
+  enable_smoke: false  # Disabled for credentializing reports (only Functional + Accessibility)
+  enable_accessibility: true
+  enable_performance: false  # Disabled for credentializing reports
+  enable_uiux: false  # Disabled for credentializing reports
+  execution_percentage: 0.3  # Execute 30% of identified tests (high-impact)
 
