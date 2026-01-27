@@ -14,7 +14,7 @@ output:
 # Browser Settings
 browser:
   headless: false
-  timeout: 30000  # milliseconds
+  timeout: 60000  # milliseconds (increased to 60s for slow-loading sites)
   viewport:
     width: 1920
     height: 1080

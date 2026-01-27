@@ -125,7 +125,7 @@ class BrowserManager:
     
     async def navigate(self, page: Page, url: str, wait_until: str = "networkidle") -> bool:
         """
-        Navigate to a URL
+        Navigate to a URL with retry logic and fallback strategies
         
         Args:
             page: Playwright page object
@@ -136,22 +136,70 @@ class BrowserManager:
         Returns:
             True if navigation successful, False otherwise
         """
-        try:
-            response = await page.goto(url, wait_until=wait_until, timeout=self.timeout)
-            
-            # Additional wait to ensure page is fully interactive (if not already waiting for networkidle)
-            # This helps with SPAs and dynamic content
-            if wait_until != 'networkidle':
+        max_retries = 2
+        # Fallback strategies: try networkidle first, then load, then domcontentloaded
+        wait_strategies = ['networkidle', 'load', 'domcontentloaded'] if wait_until == 'networkidle' else [wait_until]
+        
+        for attempt in range(max_retries):
+            for strategy_idx, strategy in enumerate(wait_strategies):
                 try:
-                    await page.wait_for_load_state('networkidle', timeout=5000)
-                except:
-                    pass  # Continue if timeout
-            
-            # Small additional wait for JavaScript to execute and page to stabilize
-            await page.wait_for_timeout(1000)
-            
-            return response is not None and response.status < 400
-        except Exception as e:
-            logger.error(f"Error navigating to {url}: {e}")
-            return False
+                    # Use longer timeout for retries
+                    timeout = self.timeout * (2 if attempt > 0 else 1)
+                    
+                    response = await page.goto(url, wait_until=strategy, timeout=timeout)
+                    
+                    # If we used a faster strategy but wanted networkidle, try to wait for it with shorter timeout
+                    if strategy != 'networkidle' and wait_until == 'networkidle':
+                        try:
+                            await page.wait_for_load_state('networkidle', timeout=10000)
+                        except:
+                            pass  # Continue if timeout - page is still usable
+                    
+                    # Small additional wait for JavaScript to execute and page to stabilize
+                    await page.wait_for_timeout(1000)
+                    
+                    if response is not None and response.status < 400:
+                        if strategy != wait_until:
+                            logger.debug(f"Navigation to {url} succeeded with fallback strategy: {strategy}")
+                        return True
+                    elif response and response.status >= 400:
+                        logger.warning(f"Navigation to {url} returned status {response.status}")
+                        return False
+                        
+                except Exception as e:
+                    error_msg = str(e)
+                    # If it's a timeout and we have more strategies, try next one
+                    if "timeout" in error_msg.lower():
+                        if strategy_idx < len(wait_strategies) - 1:
+                            logger.debug(f"Timeout with {strategy} for {url}, trying next strategy...")
+                            continue
+                        elif attempt < max_retries - 1:
+                            logger.warning(f"Navigation timeout (attempt {attempt + 1}/{max_retries}) for {url}, retrying...")
+                            await asyncio.sleep(2)  # Brief delay before retry
+                            break  # Break to retry outer loop
+                        else:
+                            # All strategies exhausted, try final fallback
+                            logger.warning(f"Navigation timeout for {url} with all strategies, using 'load' as final fallback...")
+                            try:
+                                response = await page.goto(url, wait_until='load', timeout=self.timeout)
+                                await page.wait_for_timeout(2000)  # Give page time to stabilize
+                                if response and response.status < 400:
+                                    return True
+                            except Exception as fallback_error:
+                                logger.error(f"Error navigating to {url} (all strategies failed): {fallback_error}")
+                                return False
+                    else:
+                        # Non-timeout error - try next strategy or retry
+                        if strategy_idx < len(wait_strategies) - 1:
+                            logger.debug(f"Error with {strategy} for {url}: {error_msg}, trying next strategy...")
+                            continue
+                        elif attempt < max_retries - 1:
+                            logger.warning(f"Navigation error (attempt {attempt + 1}/{max_retries}) for {url}, retrying...")
+                            await asyncio.sleep(2)
+                            break
+                        else:
+                            logger.error(f"Error navigating to {url}: {error_msg}")
+                            return False
+        
+        return False
 
