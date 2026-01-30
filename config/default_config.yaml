@@ -75,6 +75,7 @@ reporting:
   include_screenshots: true
   chart_theme: "light"
   pdf_friendly: true
+  sales_email: "sales@trigent.com"  # Sales team email for CTA links
 
 # AI Configuration
 ai:

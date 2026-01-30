@@ -100,6 +100,24 @@ class TestRunner:
         url_concurrency = min(url_concurrency, len(tests_by_url))
         
         # Execute tests - run URLs in parallel if url_concurrency > 1
+        reuse_page_per_url = bool(browser_config.get('reuse_page_per_url', True))
+        reset_strategy = str(browser_config.get('reset_strategy', 'goto')).lower()  # goto | reload | none
+
+        async def reset_page_state(page: Page, url: str) -> None:
+            """Reset page state between tests while keeping the same session/cookies."""
+            if reset_strategy == 'none':
+                return
+            if reset_strategy == 'reload':
+                try:
+                    await page.reload(wait_until='domcontentloaded', timeout=15000)
+                    await page.wait_for_timeout(500)
+                except Exception:
+                    # Fallback to a normal navigation if reload fails
+                    await self.browser_manager.navigate(page, url, wait_until='domcontentloaded')
+                return
+            # default: goto
+            await self.browser_manager.navigate(page, url, wait_until='domcontentloaded')
+
         if url_concurrency > 1 and len(tests_by_url) > 1:
             # Parallel execution at URL level
             semaphore = asyncio.Semaphore(url_concurrency)
@@ -108,33 +126,53 @@ class TestRunner:
                 """Run all tests for a single URL"""
                 async with semaphore:
                     url_results = []
-                    for test_case in url_tests:
-                        page = None
-                        try:
-                            # Ensure browser is started
-                            if not self.browser_manager.context:
-                                await self.browser_manager.start()
-                            
-                            # Create new page (will handle context errors internally)
+                    page: Page | None = None
+                    try:
+                        # Ensure browser is started
+                        if not self.browser_manager.context:
+                            await self.browser_manager.start()
+
+                        # Reuse a single page per URL (faster) or create per-test pages (more isolated)
+                        if reuse_page_per_url:
                             page = await self.browser_manager.new_page()
-                            
-                            # Navigate for each test to ensure proper page state
-                            result = await self._execute_test(test_case, company, page, url, skip_navigation=False)
-                            url_results.append(result)
-                            
-                        except Exception as e:
-                            logger.error(f"Error executing {test_case.test_id}: {e}")
-                            url_results.append(self._create_failed_result(
-                                test_case, company, url,
-                                f"Test execution error: {str(e)}",
-                                str(e)
-                            ))
-                        finally:
-                            if page:
-                                try:
-                                    await page.close()
-                                except Exception as e:
-                                    logger.debug(f"Error closing page: {e}")
+                            # One upfront navigation for the URL batch
+                            await self.browser_manager.navigate(page, url, wait_until='domcontentloaded')
+
+                        for idx, test_case in enumerate(url_tests):
+                            try:
+                                if not reuse_page_per_url:
+                                    page = await self.browser_manager.new_page()
+                                else:
+                                    # Reset between tests to keep deterministic state while preserving session
+                                    if idx > 0:
+                                        await reset_page_state(page, url)
+
+                                # If we reused and already navigated/reset, skip extra navigation in _execute_test
+                                result = await self._execute_test(
+                                    test_case, company, page, url,
+                                    skip_navigation=reuse_page_per_url
+                                )
+                                url_results.append(result)
+                            except Exception as e:
+                                logger.error(f"Error executing {test_case.test_id}: {e}")
+                                url_results.append(self._create_failed_result(
+                                    test_case, company, url,
+                                    f"Test execution error: {str(e)}",
+                                    str(e)
+                                ))
+                            finally:
+                                if not reuse_page_per_url and page:
+                                    try:
+                                        await page.close()
+                                    except Exception as e:
+                                        logger.debug(f"Error closing page: {e}")
+                                    page = None
+                    finally:
+                        if reuse_page_per_url and page:
+                            try:
+                                await page.close()
+                            except Exception as e:
+                                logger.debug(f"Error closing page: {e}")
                     return url_results
             
             # Run all URLs in parallel
@@ -146,33 +184,49 @@ class TestRunner:
         else:
             # Sequential execution (original behavior)
             for url, url_tests in tests_by_url.items():
-                for test_case in url_tests:
-                    page = None
-                    try:
-                        # Ensure browser is started
-                        if not self.browser_manager.context:
-                            await self.browser_manager.start()
-                        
-                        # Create new page (will handle context errors internally)
+                page: Page | None = None
+                try:
+                    # Ensure browser is started
+                    if not self.browser_manager.context:
+                        await self.browser_manager.start()
+
+                    if reuse_page_per_url:
                         page = await self.browser_manager.new_page()
-                        
-                        # Navigate for each test to ensure proper page state
-                        result = await self._execute_test(test_case, company, page, url, skip_navigation=False)
-                        results.append(result)
-                        
-                    except Exception as e:
-                        logger.error(f"Error executing {test_case.test_id}: {e}")
-                        results.append(self._create_failed_result(
-                            test_case, company, url,
-                            f"Test execution error: {str(e)}",
-                            str(e)
-                        ))
-                    finally:
-                        if page:
-                            try:
-                                await page.close()
-                            except Exception as e:
-                                logger.debug(f"Error closing page: {e}")
+                        await self.browser_manager.navigate(page, url, wait_until='domcontentloaded')
+
+                    for idx, test_case in enumerate(url_tests):
+                        try:
+                            if not reuse_page_per_url:
+                                page = await self.browser_manager.new_page()
+                            else:
+                                if idx > 0:
+                                    await reset_page_state(page, url)
+
+                            result = await self._execute_test(
+                                test_case, company, page, url,
+                                skip_navigation=reuse_page_per_url
+                            )
+                            results.append(result)
+                        except Exception as e:
+                            logger.error(f"Error executing {test_case.test_id}: {e}")
+                            results.append(self._create_failed_result(
+                                test_case, company, url,
+                                f"Test execution error: {str(e)}",
+                                str(e)
+                            ))
+                        finally:
+                            if not reuse_page_per_url and page:
+                                try:
+                                    await page.close()
+                                except Exception as e:
+                                    logger.debug(f"Error closing page: {e}")
+                                page = None
+                finally:
+                    if reuse_page_per_url and page:
+                        try:
+                            await page.close()
+                        except Exception as e:
+                            logger.debug(f"Error closing page: {e}")
         
         return results
     
