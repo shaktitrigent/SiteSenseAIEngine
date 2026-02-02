@@ -134,9 +134,9 @@ class ReportGenerator:
         # Render consolidated template
         html_content = self._render_consolidated_template(template_data)
         
-        # Save file with new naming convention: <CompanyName>-Report-<YYYY.DD.MM>.html
+        # Save file with new naming convention: <CompanyName>-Report-<YYYY-MM-DD>.html
         company_safe = self._sanitize_company_name(company_name)
-        date_str = datetime.now().strftime('%Y.%d.%m')
+        date_str = datetime.now().strftime('%Y-%m-%d')
         filename = f"{company_safe}-Report-{date_str}.html"
         filepath = domain_dir / filename
         
