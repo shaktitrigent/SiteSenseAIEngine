@@ -28,64 +28,65 @@ class ExcelReader:
     
     def read_urls(self, excel_path: str) -> List[CompanyData]:
         """
-        Read URLs from Excel file and group by domain
+        Read URLs from Excel file and group by company name
+        Excel format: First row has headers "CompanyName" and "URL"
+        Data rows contain company name and URL pairs
         
         Args:
             excel_path: Path to Excel file
             
         Returns:
-            List of CompanyData objects grouped by domain
+            List of CompanyData objects grouped by company name
         """
         try:
+            # Read Excel file with headers
             df = pd.read_excel(excel_path)
             
-            if self.url_column not in df.columns:
-                raise ValueError(f"Column '{self.url_column}' not found in Excel file")
+            # Check for required columns
+            required_columns = ['CompanyName', 'URL']
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            if missing_columns:
+                raise ValueError(f"Excel file must have columns: {required_columns}. Missing: {missing_columns}")
             
-            # Extract URLs and normalize
-            urls = df[self.url_column].dropna().unique().tolist()
-            
-            # Group by domain
+            # Group by company name (not domain, since same company can have multiple URLs)
             companies_dict: Dict[str, CompanyData] = {}
             
-            for url in urls:
-                if not isinstance(url, str) or not url.strip():
+            for idx, row in df.iterrows():
+                # Skip empty rows
+                if pd.isna(row['CompanyName']) or pd.isna(row['URL']):
+                    continue
+                
+                company_name = str(row['CompanyName']).strip()
+                url = str(row['URL']).strip()
+                
+                # Skip if empty
+                if not company_name or not url:
                     continue
                 
                 # Normalize URL
-                url = url.strip()
                 if not url.startswith(('http://', 'https://')):
                     url = f"https://{url}"
                 
-                # Extract domain
+                # Extract domain from URL
                 parsed = urlparse(url)
                 domain = parsed.netloc or parsed.path.split('/')[0]
                 
-                # Get company name
-                if self.company_column and self.company_column in df.columns:
-                    # Use explicit company column if available
-                    company_row = df[df[self.url_column] == url]
-                    if not company_row.empty:
-                        company_name = str(company_row[self.company_column].iloc[0])
-                    else:
-                        company_name = self._sanitize_domain(domain)
-                else:
-                    # Infer from domain
-                    company_name = self._sanitize_domain(domain)
-                
-                # Group by domain
-                if domain not in companies_dict:
-                    companies_dict[domain] = CompanyData(
+                # Group by company name (use company name as key)
+                # If same company name appears multiple times, add URLs to same company
+                if company_name not in companies_dict:
+                    companies_dict[company_name] = CompanyData(
                         company_name=company_name,
-                        domain=domain,
+                        domain=domain,  # Use first URL's domain as primary domain
                         urls=[]
                     )
                 
-                if url not in companies_dict[domain].urls:
-                    companies_dict[domain].urls.append(url)
+                # Add URL if not already present
+                if url not in companies_dict[company_name].urls:
+                    companies_dict[company_name].urls.append(url)
             
             companies = list(companies_dict.values())
-            logger.info(f"Read {len(urls)} URLs, grouped into {len(companies)} companies")
+            total_urls = sum(len(c.urls) for c in companies)
+            logger.info(f"Read {total_urls} URLs for {len(companies)} companies")
             
             return companies
             

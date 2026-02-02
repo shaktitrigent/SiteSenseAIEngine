@@ -1,14 +1,12 @@
 """
-HTML report generator with charts and PDF conversion
+HTML report generator
 """
 
 from pathlib import Path
 from typing import List, Dict, Any
 from jinja2 import Template
 import logging
-import asyncio
-import os
-from playwright.async_api import async_playwright
+from datetime import datetime
 
 from src.models import TestResult, TestType, Severity
 
@@ -69,29 +67,6 @@ class ReportGenerator:
             company_name, domain, functional_results, accessibility_results, 
             domain_dir, total_identified=total_identified, total_executed=total_executed
         )
-        
-        # Convert HTML to PDF
-        if html_file:
-            try:
-                # Try to get current event loop
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    # If loop is already running, we need to schedule it
-                    # Create a new event loop in a thread
-                    import threading
-                    def run_in_thread():
-                        new_loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(new_loop)
-                        new_loop.run_until_complete(self._convert_html_to_pdf([html_file], domain_dir))
-                        new_loop.close()
-                    thread = threading.Thread(target=run_in_thread)
-                    thread.start()
-                    thread.join()
-                else:
-                    loop.run_until_complete(self._convert_html_to_pdf([html_file], domain_dir))
-            except RuntimeError:
-                # No event loop, create new one
-                asyncio.run(self._convert_html_to_pdf([html_file], domain_dir))
     
     def _generate_consolidated_report(self, company_name: str, domain: str,
                                      functional_results: List[TestResult],
@@ -135,6 +110,12 @@ class ReportGenerator:
         # Calculate severity breakdown by category for table
         severity_by_category = self._calculate_severity_by_category(functional_results, accessibility_results)
         
+        # Calculate Test Execution Summary by Severity table data
+        execution_summary = self._calculate_execution_summary(functional_results, accessibility_results)
+        
+        # Order results: FAILED first, then PASSED
+        all_results_ordered = sorted(all_results, key=lambda r: (r.status.value != 'fail', r.test_id))
+        
         # Prepare template data
         template_data = {
             'company_name': company_name,
@@ -142,19 +123,21 @@ class ReportGenerator:
             'stats': stats,
             'functional_results': functional_results,
             'accessibility_results': accessibility_results,
-            'all_results': all_results,
+            'all_results': all_results_ordered,
             'logo_path': logo_path,
             'executive_summary': executive_summary,
             'sales_email': sales_email,
-            'severity_by_category': severity_by_category
+            'severity_by_category': severity_by_category,
+            'execution_summary': execution_summary
         }
         
         # Render consolidated template
         html_content = self._render_consolidated_template(template_data)
         
-        # Save file
-        domain_safe = self._sanitize_domain(domain)
-        filename = f"{domain_safe}_Consolidated_Quality_Report.html"
+        # Save file with new naming convention: <CompanyName>-Report-<YYYY.DD.MM>.html
+        company_safe = self._sanitize_company_name(company_name)
+        date_str = datetime.now().strftime('%Y.%d.%m')
+        filename = f"{company_safe}-Report-{date_str}.html"
         filepath = domain_dir / filename
         
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -250,6 +233,28 @@ class ReportGenerator:
         sanitized = sanitized.strip('_')
         return sanitized
     
+    def _sanitize_company_name(self, company_name: str) -> str:
+        """
+        Sanitize company name for use in file names
+        
+        Args:
+            company_name: Company name string
+            
+        Returns:
+            Sanitized company name safe for file system
+        """
+        # Replace invalid characters with nothing or safe alternatives
+        invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+        sanitized = company_name
+        for char in invalid_chars:
+            sanitized = sanitized.replace(char, '')
+        # Replace spaces with nothing (for cleaner filenames)
+        sanitized = sanitized.replace(' ', '')
+        # Remove multiple consecutive spaces
+        while '  ' in sanitized:
+            sanitized = sanitized.replace('  ', ' ')
+        return sanitized.strip()
+    
     def _copy_logo_to_report_dir(self, report_dir: Path) -> str:
         """
         Copy logo to report directory and return base64 data URI
@@ -310,60 +315,6 @@ class ReportGenerator:
         else:
             logger.warning(f"Trigent logo not found at {assets_dir / 'trigent-logo.png'}")
             return ""
-    
-    async def _convert_html_to_pdf(self, html_files: List[Path], output_dir: Path):
-        """
-        Convert HTML files to PDF using Playwright
-        
-        Args:
-            html_files: List of HTML file paths to convert
-            output_dir: Directory to save PDF files
-        """
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context()
-                page = await context.new_page()
-                
-                for html_file in html_files:
-                    try:
-                        # Read HTML file
-                        html_path = html_file.resolve()
-                        
-                        # Load HTML file
-                        await page.goto(f"file://{html_path}")
-                        await page.wait_for_load_state('networkidle')
-                        
-                        # Generate PDF filename
-                        pdf_filename = html_file.stem + '.pdf'
-                        pdf_path = output_dir / pdf_filename
-                        
-                        # Wait for watermark to be rendered
-                        await page.wait_for_selector('.sample-watermark', state='attached', timeout=5000)
-                        
-                        await page.pdf(
-                            path=str(pdf_path),
-                            format='A4',
-                            landscape=False,
-                            print_background=True,
-                            prefer_css_page_size=False,
-                            margin={
-                                'top': '10mm',
-                                'right': '10mm',
-                                'bottom': '10mm',
-                                'left': '10mm'
-                            }
-                        )
-                        
-                        logger.info(f"Generated PDF: {pdf_path}")
-                        
-                    except Exception as e:
-                        logger.error(f"Error converting {html_file} to PDF: {e}")
-                
-                await browser.close()
-                
-        except Exception as e:
-            logger.error(f"Error during PDF conversion: {e}")
     
     def _calculate_stats(self, results: List[TestResult]) -> Dict[str, Any]:
         """Calculate statistics for report"""
@@ -439,6 +390,81 @@ class ReportGenerator:
         
         return breakdown
     
+    def _calculate_execution_summary(self, functional_results: List[TestResult],
+                                    accessibility_results: List[TestResult]) -> Dict[str, Dict[str, int]]:
+        """
+        Calculate Test Execution Summary by Severity table data
+        
+        Returns:
+            Dictionary with structure:
+            {
+                'Curated Test Cases Executed': {'functional': N, 'accessibility': N, 'total': N},
+                'Test Passed': {'functional': N, 'accessibility': N, 'total': N},
+                'Test Failed': {'functional': N, 'accessibility': N, 'total': N},
+                'Critical Failure': {'functional': N, 'accessibility': N, 'total': N},
+                'Major Failure': {'functional': N, 'accessibility': N, 'total': N},
+                'Minor Failure': {'functional': N, 'accessibility': N, 'total': N}
+            }
+        """
+        summary = {
+            'Curated Test Cases Executed': {'functional': 0, 'accessibility': 0, 'total': 0},
+            'Test Passed': {'functional': 0, 'accessibility': 0, 'total': 0},
+            'Test Failed': {'functional': 0, 'accessibility': 0, 'total': 0},
+            'Critical Failure': {'functional': 0, 'accessibility': 0, 'total': 0},
+            'Major Failure': {'functional': 0, 'accessibility': 0, 'total': 0},
+            'Minor Failure': {'functional': 0, 'accessibility': 0, 'total': 0}
+        }
+        
+        # Count functional results
+        func_total = len(functional_results)
+        func_passed = sum(1 for r in functional_results if r.status.value == 'pass')
+        func_failed = sum(1 for r in functional_results if r.status.value == 'fail')
+        func_p1 = sum(1 for r in functional_results if r.status.value == 'fail' and r.severity.value == 'P1')
+        func_p2 = sum(1 for r in functional_results if r.status.value == 'fail' and r.severity.value == 'P2')
+        func_p3 = sum(1 for r in functional_results if r.status.value == 'fail' and r.severity.value == 'P3')
+        
+        # Count accessibility results
+        a11y_total = len(accessibility_results)
+        a11y_passed = sum(1 for r in accessibility_results if r.status.value == 'pass')
+        a11y_failed = sum(1 for r in accessibility_results if r.status.value == 'fail')
+        a11y_p1 = sum(1 for r in accessibility_results if r.status.value == 'fail' and r.severity.value == 'P1')
+        a11y_p2 = sum(1 for r in accessibility_results if r.status.value == 'fail' and r.severity.value == 'P2')
+        a11y_p3 = sum(1 for r in accessibility_results if r.status.value == 'fail' and r.severity.value == 'P3')
+        
+        # Populate summary
+        summary['Curated Test Cases Executed'] = {
+            'functional': func_total,
+            'accessibility': a11y_total,
+            'total': func_total + a11y_total
+        }
+        summary['Test Passed'] = {
+            'functional': func_passed,
+            'accessibility': a11y_passed,
+            'total': func_passed + a11y_passed
+        }
+        summary['Test Failed'] = {
+            'functional': func_failed,
+            'accessibility': a11y_failed,
+            'total': func_failed + a11y_failed
+        }
+        summary['Critical Failure'] = {
+            'functional': func_p1,
+            'accessibility': a11y_p1,
+            'total': func_p1 + a11y_p1
+        }
+        summary['Major Failure'] = {
+            'functional': func_p2,
+            'accessibility': a11y_p2,
+            'total': func_p2 + a11y_p2
+        }
+        summary['Minor Failure'] = {
+            'functional': func_p3,
+            'accessibility': a11y_p3,
+            'total': func_p3 + a11y_p3
+        }
+        
+        return summary
+    
     def _generate_consolidated_executive_summary(self, functional_results: List[TestResult],
                                                  accessibility_results: List[TestResult],
                                                  stats: Dict[str, Any],
@@ -480,6 +506,11 @@ class ReportGenerator:
         else:
             overall_risk = "Low"
         
+        # Generate smart conditional messaging
+        execution_message = self._generate_execution_message(
+            total_executed, accessibility_failures, functional_failures
+        )
+        
         return {
             'critical_issues': p1_failures,
             'user_impact': user_impact,
@@ -487,10 +518,44 @@ class ReportGenerator:
             'total_failures': total_failures,
             'accessibility_failures': accessibility_failures,
             'functional_failures': functional_failures,
+            'execution_message': execution_message,
             'pass_rate': stats['pass_rate'],
             'total_identified': total_identified,
             'total_executed': total_executed
         }
+    
+    def _generate_execution_message(self, total_executed: int, 
+                                   accessibility_failures: int, 
+                                   functional_failures: int) -> str:
+        """
+        Generate smart conditional execution message based on failure patterns
+        
+        Args:
+            total_executed: Total number of executed test cases
+            accessibility_failures: Number of accessibility failures
+            functional_failures: Number of functional failures
+            
+        Returns:
+            Formatted message string
+        """
+        # Case 4: No failures (All Pass)
+        if accessibility_failures == 0 and functional_failures == 0:
+            return f"A total of <strong>{total_executed}</strong> high-priority test cases were identified and executed as part of this assessment. All executed test cases passed successfully. The Risk Dashboard below provides an at-a-glance view of the overall risk posture, followed by detailed pass/fail results for each executed test case across Functional and Accessibility categories."
+        
+        # Case 1: Both Functional and Accessibility failures exist
+        if accessibility_failures > 0 and functional_failures > 0:
+            return f"A total of <strong>{total_executed}</strong> high-priority test cases were identified and executed as part of this assessment. Of these, <strong>{accessibility_failures}</strong> accessibility and <strong>{functional_failures}</strong> functional test cases resulted in failures, while the remaining test cases passed successfully. The Risk Dashboard below provides an at-a-glance view of the overall risk posture, followed by detailed pass/fail results for each executed test case across Functional and Accessibility categories."
+        
+        # Case 2: ONLY Accessibility failures exist
+        if accessibility_failures > 0 and functional_failures == 0:
+            return f"A total of <strong>{total_executed}</strong> high-priority test cases were identified and executed as part of this assessment. Of these, <strong>{accessibility_failures}</strong> accessibility test cases resulted in failures. All functional tests passed successfully. The Risk Dashboard below provides an at-a-glance view of the overall risk posture, followed by detailed pass/fail results for each executed test case across Functional and Accessibility categories."
+        
+        # Case 3: ONLY Functional failures exist
+        if functional_failures > 0 and accessibility_failures == 0:
+            return f"A total of <strong>{total_executed}</strong> high-priority test cases were identified and executed as part of this assessment. Of these, <strong>{functional_failures}</strong> functional test cases resulted in failures. All accessibility tests passed successfully. The Risk Dashboard below provides an at-a-glance view of the overall risk posture, followed by detailed pass/fail results for each executed test case across Functional and Accessibility categories."
+        
+        # Fallback (should not reach here)
+        return f"A total of <strong>{total_executed}</strong> high-priority test cases were identified and executed as part of this assessment. The Risk Dashboard below provides an at-a-glance view of the overall risk posture, followed by detailed pass/fail results for each executed test case across Functional and Accessibility categories."
     
     def _generate_executive_summary(self, results: List[TestResult], stats: Dict[str, Any], 
                                    report_type: str) -> Dict[str, Any]:
@@ -910,12 +975,19 @@ class ReportGenerator:
             border-bottom: 2px solid #dee2e6;
             font-size: 14px;
         }
+        .severity-summary-table th:not(:first-child) {
+            text-align: center;
+        }
         .severity-summary-table td {
             padding: 12px;
             text-align: center;
             border-bottom: 1px solid #e9ecef;
             font-size: 14px;
             color: #495057;
+            vertical-align: middle;
+        }
+        .severity-summary-table td:first-child {
+            text-align: left;
         }
         .severity-summary-table tbody tr:last-child td {
             border-bottom: none;
@@ -969,7 +1041,7 @@ class ReportGenerator:
         table.test-case-card td {
             border: 1px solid #e0e0e0;
             padding: 12px;
-            font-size: 11px;
+            font-size: 13px;
             line-height: 1.6;
             vertical-align: top;
             word-wrap: break-word;
@@ -1000,11 +1072,20 @@ class ReportGenerator:
             background: #f5f5f5;
             font-weight: 600;
             color: #333;
-            white-space: nowrap;
+            white-space: normal;
+            word-break: break-word;
+            hyphens: auto;
+            width: 8%;
+            min-width: 8%;
+            max-width: 8%;
         }
         /* Full-width content cells (use colspan=3 in HTML) */
         .cell-section-content {
             overflow: hidden;
+            width: 92%;
+            word-wrap: break-word;
+            word-break: break-word;
+            overflow-wrap: anywhere;
         }
         .test-case-section-content-wrapper {
             display: block;
@@ -1013,15 +1094,17 @@ class ReportGenerator:
             overflow: hidden;
             word-break: normal;
             overflow-wrap: anywhere;
+            font-size: 13px;
+            line-height: 1.6;
         }
         .test-case-id {
             font-weight: bold;
             color: #2c3e50;
-            font-size: 11px;
+            font-size: 13px;
         }
         .test-case-url {
             word-break: break-all;
-            font-size: 11px;
+            font-size: 13px;
         }
         .test-case-url a {
             color: #2196F3;
@@ -1031,7 +1114,7 @@ class ReportGenerator:
             display: inline-block;
             padding: 6px 12px;
             border-radius: 3px;
-            font-size: 11px;
+            font-size: 13px;
             font-weight: bold;
             text-transform: uppercase;
             color: white;
@@ -1048,7 +1131,7 @@ class ReportGenerator:
             display: inline-block;
             padding: 4px 8px;
             border-radius: 3px;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: bold;
         }
         .severity-p1 { background: #e74c3c; color: white; }
@@ -1172,14 +1255,14 @@ class ReportGenerator:
             <img src="{{ logo_path }}" alt="Trigent Logo" />
         </div>
         
-        <h1>AI Powered Website Quality Assessment</h1>
+        <h1>AI Powered Quality Assessment – {{ company_name }}</h1>
         
         <h2 style="margin-top: 20px; margin-bottom: 15px; color: #495057; font-size: 20px; font-weight: 600;">Executive Summary</h2>
         
         <div class="executive-summary">
             <p>This website has been analyzed using Trigent's AI-driven QA engine, designed to identify high-priority functional and accessibility issues that may impact user experience and regulatory compliance.</p>
             <p style="margin-top: 15px;"><strong>Assessment Overview:</strong> A comprehensive test suite comprising <strong>{{ executive_summary.total_identified }}</strong> total test cases was identified to ensure complete coverage. This report summarizes results from a curated subset of high-priority test cases executed, with a focus on user experience and accessibility compliance.</p>
-            <p style="margin-top: 15px;"> A total of <strong>{{ executive_summary.total_executed }}</strong> high-priority test cases were identified and executed as part of this assessment. Of these, <strong>{{ executive_summary.accessibility_failures }}</strong> accessibility and <strong>{{ executive_summary.functional_failures }}</strong> functional test cases resulted in failures, while the remaining test cases passed successfully. The Risk Dashboard below provides an at-a-glance view of the overall risk posture, followed by detailed pass/fail results for each executed test case across Functional and Accessibility categories.</p>
+            <p style="margin-top: 15px;">{{ executive_summary.execution_message|safe }}</p>
         </div>
         <div class="kpi-tiles">
             <div class="kpi-tile {% if executive_summary.critical_issues >= 1 %}critical{% else %}low{% endif %}">
@@ -1216,36 +1299,48 @@ class ReportGenerator:
             <table class="severity-summary-table">
                 <thead>
                     <tr>
-                        <th>Severity</th>
-                        <th>Total Tests</th>
-                        <th>Functional Tests</th>
-                        <th>Accessibility Tests</th>
+                        <th>Test Execution Summary</th>
+                        <th>Functional</th>
+                        <th>Accessibility</th>
+                        <th>Total</th>
                     </tr>
                 </thead>
                 <tbody>
                     <tr>
-                        <td class="severity-label severity-critical">Critical</td>
-                        <td>{{ severity_by_category.P1.total }}</td>
-                        <td>{{ severity_by_category.P1.functional }}</td>
-                        <td>{{ severity_by_category.P1.accessibility }}</td>
+                        <td class="severity-label">Curated Test Cases Executed</td>
+                        <td>{{ execution_summary['Curated Test Cases Executed'].functional }}</td>
+                        <td>{{ execution_summary['Curated Test Cases Executed'].accessibility }}</td>
+                        <td>{{ execution_summary['Curated Test Cases Executed'].total }}</td>
                     </tr>
                     <tr>
-                        <td class="severity-label severity-major">Major</td>
-                        <td>{{ severity_by_category.P2.total }}</td>
-                        <td>{{ severity_by_category.P2.functional }}</td>
-                        <td>{{ severity_by_category.P2.accessibility }}</td>
+                        <td class="severity-label severity-passed">Test Passed</td>
+                        <td>{{ execution_summary['Test Passed'].functional }}</td>
+                        <td>{{ execution_summary['Test Passed'].accessibility }}</td>
+                        <td>{{ execution_summary['Test Passed'].total }}</td>
                     </tr>
                     <tr>
-                        <td class="severity-label severity-minor">Minor</td>
-                        <td>{{ severity_by_category.P3.total }}</td>
-                        <td>{{ severity_by_category.P3.functional }}</td>
-                        <td>{{ severity_by_category.P3.accessibility }}</td>
+                        <td class="severity-label severity-critical">Test Failed</td>
+                        <td>{{ execution_summary['Test Failed'].functional }}</td>
+                        <td>{{ execution_summary['Test Failed'].accessibility }}</td>
+                        <td>{{ execution_summary['Test Failed'].total }}</td>
                     </tr>
                     <tr>
-                        <td class="severity-label severity-passed">Passed</td>
-                        <td>{{ severity_by_category.Passed.total }}</td>
-                        <td>{{ severity_by_category.Passed.functional }}</td>
-                        <td>{{ severity_by_category.Passed.accessibility }}</td>
+                        <td class="severity-label severity-critical">Critical Failure</td>
+                        <td>{{ execution_summary['Critical Failure'].functional }}</td>
+                        <td>{{ execution_summary['Critical Failure'].accessibility }}</td>
+                        <td>{{ execution_summary['Critical Failure'].total }}</td>
+                    </tr>
+                    <tr>
+                        <td class="severity-label severity-major">Major Failure</td>
+                        <td>{{ execution_summary['Major Failure'].functional }}</td>
+                        <td>{{ execution_summary['Major Failure'].accessibility }}</td>
+                        <td>{{ execution_summary['Major Failure'].total }}</td>
+                    </tr>
+                    <tr>
+                        <td class="severity-label severity-minor">Minor Failure</td>
+                        <td>{{ execution_summary['Minor Failure'].functional }}</td>
+                        <td>{{ execution_summary['Minor Failure'].accessibility }}</td>
+                        <td>{{ execution_summary['Minor Failure'].total }}</td>
                     </tr>
                 </tbody>
             </table>
@@ -1292,7 +1387,7 @@ class ReportGenerator:
                     </td>
                 </tr>
                 <tr class="summary-row">
-                    <td class="cell-section-title">Result <br>Summary</td>
+                    <td class="cell-section-title">Result Summary</td>
                     <td class="cell-section-content" colspan="3">
                         <div class="test-case-section-content-wrapper">{{ result.summary }}</div>
                     </td>
@@ -1537,7 +1632,7 @@ class ReportGenerator:
             display: inline-block;
             padding: 4px 8px;
             border-radius: 3px;
-            font-size: 12px;
+            font-size: 13px;
             font-weight: bold;
         }
         .severity-p1 { background: #e74c3c; color: white; }
