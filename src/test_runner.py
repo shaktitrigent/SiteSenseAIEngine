@@ -500,7 +500,19 @@ class TestRunner:
                     return broken;
                 }""")
                 status = TestStatus.PASS if broken_links == 0 else TestStatus.FAIL
-                summary = f"Link validation analysis completed. Found {broken_links} potentially broken or invalid link{'s' if broken_links != 1 else ''}. {'✓ All links appear to be valid and functional, ensuring smooth user navigation' if status == TestStatus.PASS else f'✗ {broken_links} link{"s" if broken_links != 1 else ""} may be broken or invalid. Broken links degrade user experience, harm SEO rankings, and can lead to user frustration. Review and fix all broken links to maintain site credibility.'}"
+
+                # Safe summary construction (avoid nested f-strings and fix indentation)
+                plural_s = 's' if broken_links != 1 else ''
+                if status == TestStatus.PASS:
+                    summary = (
+                        f"Link validation analysis completed. Found {broken_links} potentially broken or invalid link{plural_s}. "
+                        "✓ All links appear to be valid and functional, ensuring smooth user navigation"
+                    )
+                else:
+                    summary = (
+                        f"Link validation analysis completed. Found {broken_links} potentially broken or invalid link{plural_s}. "
+                        f"✗ {broken_links} link{plural_s} may be broken or invalid. Broken links degrade user experience, harm SEO rankings, and can lead to user frustration. Review and fix all broken links to maintain site credibility."
+                    )
                 
             else:
                 status = TestStatus.PASS
@@ -577,7 +589,20 @@ class TestRunner:
                         return {total: images.length, withAlt: withAlt, withoutAlt: withoutAlt, emptyAlt: emptyAlt};
                     }""")
                     status = TestStatus.PASS if image_info['withoutAlt'] == 0 else TestStatus.FAIL
-                    summary = f"Image alt text validation: {image_info['withAlt']} with alt text, {image_info['withoutAlt']} missing alt, {image_info['emptyAlt']} empty alt (decorative). {'✓ All images have appropriate alt attributes' if image_info['withoutAlt'] == 0 else f'✗ {image_info["withoutAlt"]} images missing alt text, accessibility concern'}"
+                    # Avoid nested f-strings to prevent parsing issues
+                    if image_info['withoutAlt'] == 0:
+                        summary = (
+                            f"Image alt text validation: {image_info['withAlt']} with alt text, "
+                            f"{image_info['withoutAlt']} missing alt, {image_info['emptyAlt']} empty alt (decorative). "
+                            "✓ All images have appropriate alt attributes"
+                        )
+                    else:
+                        plural_img = 'images' if image_info['withoutAlt'] != 1 else 'image'
+                        summary = (
+                            f"Image alt text validation: {image_info['withAlt']} with alt text, "
+                            f"{image_info['withoutAlt']} missing alt, {image_info['emptyAlt']} empty alt (decorative). "
+                            f"✗ {image_info['withoutAlt']} {plural_img} missing alt text, accessibility concern"
+                        )
                     evidence = {'screenshot': screenshot_path, 'image_info': image_info}
                     
                 elif "keyboard" in category_lower or test_id_num == "003":
@@ -630,7 +655,16 @@ class TestRunner:
                         return {total: inputs.length, withLabel: withLabel, withoutLabel: withoutLabel};
                     }""")
                     status = TestStatus.PASS if form_labels['withoutLabel'] == 0 else TestStatus.FAIL
-                    summary = f"Form label association: {form_labels['withLabel']} inputs with labels, {form_labels['withoutLabel']} without. {'✓ All form inputs have associated labels' if form_labels['withoutLabel'] == 0 else f'✗ {form_labels["withoutLabel"]} inputs missing labels, accessibility issue'}"
+                    if form_labels['withoutLabel'] == 0:
+                        summary = (
+                            f"Form label association: {form_labels['withLabel']} inputs with labels, {form_labels['withoutLabel']} without. "
+                            "✓ All form inputs have associated labels"
+                        )
+                    else:
+                        summary = (
+                            f"Form label association: {form_labels['withLabel']} inputs with labels, {form_labels['withoutLabel']} without. "
+                            f"✗ {form_labels['withoutLabel']} inputs missing labels, accessibility issue"
+                        )
                     evidence = {'screenshot': screenshot_path, 'form_labels': form_labels}
                     
                 else:
