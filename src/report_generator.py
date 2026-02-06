@@ -1261,7 +1261,7 @@ class ReportGenerator:
         
         <div class="executive-summary">
             <p>This website has been analyzed using Trigent's AI-driven QA engine, designed to identify high-priority functional and accessibility issues that may impact user experience and regulatory compliance.</p>
-            <p style="margin-top: 15px;"><strong>Assessment Overview:</strong> A comprehensive test suite comprising <strong>{{ executive_summary.total_identified }}</strong> total test cases was identified to ensure complete coverage. This report summarizes results from a curated subset of high-priority test cases executed, with a focus on user experience and accessibility compliance.</p>
+            <p style="margin-top: 15px;"><strong>Assessment Overview:</strong> A comprehensive test suite comprising <strong>{{ executive_summary.total_identified }}</strong> total test cases were identified to ensure complete coverage. This report summarizes results from a curated subset of high-priority test cases executed, with a focus on user experience and accessibility compliance.</p>
             <p style="margin-top: 15px;">{{ executive_summary.execution_message|safe }}</p>
         </div>
         <div class="kpi-tiles">
@@ -1398,7 +1398,7 @@ class ReportGenerator:
         
         <div class="cta-section">
             <p style="font-size: 16px; margin-bottom: 15px;">For full assessment details and technical walkthrough, contact our sales team.</p>
-            <a href="mailto:{{ sales_email }}?subject=Request for Full Quality Assessment Report - {{ company_name }}" class="cta-button">Contact Sales for Full Assessment</a>
+            <a href="mailto:{{ sales_email }}?subject=Request for Full Quality Assessment Report - {{ company_name }}" class="cta-button">Contact Trigent for the Full Quality Report</a>
         </div>
     </div>
 </body>
