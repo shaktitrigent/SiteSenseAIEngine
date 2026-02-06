@@ -1,4 +1,4 @@
-."""
+"""
 Helper script to create an example Excel file for testing
 """
 
