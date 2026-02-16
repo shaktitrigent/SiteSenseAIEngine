@@ -105,7 +105,7 @@ class ReportGenerator:
         )
         
         # Get sales email from config
-        sales_email = self.config.get('reporting', {}).get('sales_email', 'sales@trigent.com')
+        sales_email = self.config.get('reporting', {}).get('sales_email', 'vibetesting@trigent.com')
         
         # Calculate severity breakdown by category for table
         severity_by_category = self._calculate_severity_by_category(functional_results, accessibility_results)
