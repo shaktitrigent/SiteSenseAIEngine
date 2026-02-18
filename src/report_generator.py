@@ -1397,7 +1397,7 @@ class ReportGenerator:
         </div>
         
         <div class="cta-section">
-            <p style="font-size: 16px; margin-bottom: 15px;">For full assessment details and technical walkthrough, contact our sales team.</p>
+            <p style="font-size: 16px; margin-bottom: 15px;">For full assessment details and a technical walkthrough, please contact our technical team.</p>
             <a href="mailto:{{ sales_email }}?subject=Request for Full Quality Assessment Report - {{ company_name }}" class="cta-button">Contact Trigent for the Full Quality Report</a>
         </div>
     </div>
