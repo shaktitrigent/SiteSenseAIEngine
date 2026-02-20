@@ -2,6 +2,7 @@
 Excel file reader for extracting URLs and grouping by company/domain
 """
 
+import re
 import pandas as pd
 from typing import List, Dict
 from urllib.parse import urlparse
@@ -10,6 +11,13 @@ import logging
 from src.models import CompanyData
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_company_name(name: str) -> str:
+    """Remove spaces and special characters; keep only letters and digits."""
+    if not name:
+        return ''
+    return re.sub(r'[^a-zA-Z0-9]', '', str(name).strip())
 
 
 class ExcelReader:
@@ -56,8 +64,9 @@ class ExcelReader:
                 if pd.isna(row['CompanyName']) or pd.isna(row['URL']):
                     continue
                 
-                company_name = str(row['CompanyName']).strip()
+                raw_name = str(row['CompanyName']).strip()
                 url = str(row['URL']).strip()
+                company_name = _sanitize_company_name(raw_name)
                 
                 # Skip if empty
                 if not company_name or not url:
@@ -115,9 +124,9 @@ class ExcelReader:
             for idx, row in df.iterrows():
                 company = row.get('CompanyName')
                 if pd.notna(company) and str(company).strip():
-                    name = str(company).strip()
-                    if name in company_report_map:
-                        df.at[idx, 'ReportName'] = company_report_map[name]
+                    name_safe = _sanitize_company_name(str(company))
+                    if name_safe and name_safe in company_report_map:
+                        df.at[idx, 'ReportName'] = company_report_map[name_safe]
             df.to_excel(excel_path, index=False)
             logger.info(f"Updated ReportName column in {excel_path}")
         except Exception as e:

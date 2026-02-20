@@ -135,8 +135,8 @@ class ReportGenerator:
         # Render consolidated template
         html_content = self._render_consolidated_template(template_data)
         
-        # Save file with naming: <companyname>-report-<yyyy-mm-dd>.html (lowercase, digits, hyphens only)
-        company_safe = self._sanitize_company_name(company_name)
+        # Save file with naming: <companyname>-report-<yyyy-mm-dd>.html (companyname = lowercase letters/digits only, no hyphens)
+        company_safe = self._sanitize_company_name_for_report_filename(company_name)
         date_str = datetime.now().strftime('%Y-%m-%d')
         filename = f"{company_safe}-report-{date_str}.html"
         filepath = domain_dir / filename
@@ -252,6 +252,15 @@ class ReportGenerator:
         Returns only lowercase letters, digits, and hyphens.
         """
         return self._sanitize_filename_part(company_name)
+
+    def _sanitize_company_name_for_report_filename(self, company_name: str) -> str:
+        """
+        Sanitize company name for the report filename: only lowercase letters
+        and digits, no spaces or hyphens (e.g. "LG HVAC Solutions USA" -> "lghvacsolutionsusa").
+        """
+        if not company_name:
+            return ''
+        return ''.join(c for c in str(company_name).lower() if c.isalnum())
     
     def _copy_logo_to_report_dir(self, report_dir: Path) -> str:
         """
