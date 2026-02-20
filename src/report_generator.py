@@ -54,7 +54,7 @@ class ReportGenerator:
         
         if not all_results:
             logger.warning(f"No results to generate report for {domain}")
-            return
+            return None
         
         # Calculate totals
         functional_total = total_test_counts.get('functional', len(functional_results)) if total_test_counts else len(functional_results)
@@ -63,10 +63,11 @@ class ReportGenerator:
         total_executed = len(all_results)
         
         # Generate single consolidated report
-        html_file = self._generate_consolidated_report(
+        filepath = self._generate_consolidated_report(
             company_name, domain, functional_results, accessibility_results, 
             domain_dir, total_identified=total_identified, total_executed=total_executed
         )
+        return filepath.name if filepath else None
     
     def _generate_consolidated_report(self, company_name: str, domain: str,
                                      functional_results: List[TestResult],
@@ -134,10 +135,10 @@ class ReportGenerator:
         # Render consolidated template
         html_content = self._render_consolidated_template(template_data)
         
-        # Save file with new naming convention: <CompanyName>-Report-<YYYY-MM-DD>.html
+        # Save file with naming: <companyname>-report-<yyyy-mm-dd>.html (lowercase, digits, hyphens only)
         company_safe = self._sanitize_company_name(company_name)
         date_str = datetime.now().strftime('%Y-%m-%d')
-        filename = f"{company_safe}-Report-{date_str}.html"
+        filename = f"{company_safe}-report-{date_str}.html"
         filepath = domain_dir / filename
         
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -202,9 +203,11 @@ class ReportGenerator:
         # Render template
         html_content = self._render_template(template_data, report_type)
         
-        # Save file with domain-based naming
+        # Save file with naming: <companyname>-<report>-<yyyy-mm-dd>.html (lowercase, digits, hyphens only)
         domain_safe = self._sanitize_domain(domain)
-        filename = f"{domain_safe}_{report_type}_Report.html"
+        report_safe = self._sanitize_filename_part(report_type)
+        date_str = datetime.now().strftime('%Y-%m-%d')
+        filename = f"{domain_safe}-{report_safe}-{date_str}.html"
         filepath = domain_dir / filename
         
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -213,47 +216,42 @@ class ReportGenerator:
         logger.info(f"Generated {report_type} report: {filepath}")
         return filepath
     
+    def _sanitize_filename_part(self, s: str) -> str:
+        """
+        Sanitize a string for use in report filenames: only lowercase letters,
+        digits, and hyphens allowed. No spaces, capitals, or special characters.
+        """
+        if not s:
+            return ''
+        # Lowercase and replace any character that is not a-z or 0-9 with a hyphen
+        sanitized = []
+        for c in s.lower():
+            if c.isalnum():
+                sanitized.append(c)
+            elif c in ' ._':
+                # Treat space, dot, underscore as hyphen
+                sanitized.append('-')
+            else:
+                sanitized.append('-')
+        result = ''.join(sanitized)
+        # Collapse multiple hyphens to one
+        while '--' in result:
+            result = result.replace('--', '-')
+        return result.strip('-')
+
     def _sanitize_domain(self, domain: str) -> str:
         """
-        Sanitize domain name for use in file/folder names
-        
-        Args:
-            domain: Domain string
-            
-        Returns:
-            Sanitized domain string safe for file system
+        Sanitize domain name for use in file/folder names.
+        Returns only lowercase letters, digits, and hyphens.
         """
-        # Replace invalid characters with underscores
-        sanitized = domain.replace(':', '_').replace('/', '_').replace('\\', '_')
-        sanitized = sanitized.replace(' ', '_').replace('.', '_')
-        # Remove multiple consecutive underscores
-        while '__' in sanitized:
-            sanitized = sanitized.replace('__', '_')
-        # Remove leading/trailing underscores
-        sanitized = sanitized.strip('_')
-        return sanitized
+        return self._sanitize_filename_part(domain)
     
     def _sanitize_company_name(self, company_name: str) -> str:
         """
-        Sanitize company name for use in file names
-        
-        Args:
-            company_name: Company name string
-            
-        Returns:
-            Sanitized company name safe for file system
+        Sanitize company name for use in file names.
+        Returns only lowercase letters, digits, and hyphens.
         """
-        # Replace invalid characters with nothing or safe alternatives
-        invalid_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
-        sanitized = company_name
-        for char in invalid_chars:
-            sanitized = sanitized.replace(char, '')
-        # Replace spaces with nothing (for cleaner filenames)
-        sanitized = sanitized.replace(' ', '')
-        # Remove multiple consecutive spaces
-        while '  ' in sanitized:
-            sanitized = sanitized.replace('  ', ' ')
-        return sanitized.strip()
+        return self._sanitize_filename_part(company_name)
     
     def _copy_logo_to_report_dir(self, report_dir: Path) -> str:
         """

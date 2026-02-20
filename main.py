@@ -290,19 +290,26 @@ Examples:
         # Step 6: Generate reports
         logger.info(f"\n[6/6] Generating HTML reports and PDFs...")
         report_generator = ReportGenerator(reports_dir, config)
+        company_report_map = {}  # company_name -> report filename for Excel ReportName column
         
         for company in companies:
             results = all_results[company.domain]
             total_counts = total_test_counts[company.domain]
             all_tests = all_test_cases[company.domain]
-            report_generator.generate_reports(
+            report_filename = report_generator.generate_reports(
                 company.company_name, 
                 company.domain, 
                 results,
                 total_test_counts=total_counts,
                 total_identified_tests=len(all_tests)
             )
+            if report_filename:
+                company_report_map[company.company_name] = report_filename
             logger.info(f"Generated reports (HTML + PDF) for {company.company_name}")
+        
+        # Update ReportName column in the Excel file with generated report filenames
+        if company_report_map:
+            reader.update_report_names(args.excel_file, company_report_map)
         
         # Summary
         logger.info("\n" + "=" * 60)

@@ -94,6 +94,36 @@ class ExcelReader:
             logger.error(f"Error reading Excel file: {e}")
             raise
     
+    def update_report_names(self, excel_path: str, company_report_map: Dict[str, str]) -> None:
+        """
+        Update the ReportName column in the Excel file with generated report filenames.
+        Creates the ReportName column if it does not exist.
+        
+        Args:
+            excel_path: Path to the Excel file
+            company_report_map: Map of company name -> report filename (e.g. 'trigent-software-ltd-report-2026-02-16.html')
+        """
+        if not company_report_map:
+            return
+        try:
+            df = pd.read_excel(excel_path)
+            if 'CompanyName' not in df.columns:
+                logger.warning("Excel has no CompanyName column; cannot update ReportName")
+                return
+            if 'ReportName' not in df.columns:
+                df['ReportName'] = ''
+            for idx, row in df.iterrows():
+                company = row.get('CompanyName')
+                if pd.notna(company) and str(company).strip():
+                    name = str(company).strip()
+                    if name in company_report_map:
+                        df.at[idx, 'ReportName'] = company_report_map[name]
+            df.to_excel(excel_path, index=False)
+            logger.info(f"Updated ReportName column in {excel_path}")
+        except Exception as e:
+            logger.error(f"Error updating Excel report names: {e}")
+            raise
+    
     @staticmethod
     def _sanitize_domain(domain: str) -> str:
         """
