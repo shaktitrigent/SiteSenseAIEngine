@@ -48,3 +48,5 @@ test_urls.xlsx
 *.xlsx
 example_urls.xlsx
 
+#service account key file
+service_account.json
